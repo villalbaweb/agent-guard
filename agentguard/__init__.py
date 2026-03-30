@@ -4,6 +4,7 @@ from agentguard.registry import Registry
 from agentguard.policy import PolicyEngine
 from agentguard.orchestrator import ExecutionPlanner
 from agentguard.executor import RecursiveExecutor
+from agentguard.llm import get_llm
 
 __all__ = [
     "AgentGuardState",
@@ -12,5 +13,6 @@ __all__ = [
     "Registry",
     "PolicyEngine",
     "ExecutionPlanner",
-    "RecursiveExecutor"
+    "RecursiveExecutor",
+    "get_llm"
 ]

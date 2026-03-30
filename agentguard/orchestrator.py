@@ -1,12 +1,18 @@
 from typing import Dict, Any, List
 import logging
 from .state import AgentGuardState
+from .llm import get_llm
 
 logger = logging.getLogger(__name__)
 
 class ExecutionPlanner:
     def __init__(self, registry):
         self.registry = registry
+        self.llm = get_llm()
+        if self.llm:
+            logger.info(f"ExecutionPlanner initialized with LLM router: {self.llm.__class__.__name__}")
+        else:
+            logger.info("ExecutionPlanner running in MOCK routing mode (no LLM configured).")
 
     def decompose(self, state: AgentGuardState) -> AgentGuardState:
         """Decompose a high-level task into sub-intents."""
@@ -30,12 +36,27 @@ class ExecutionPlanner:
         """Map subtasks to agents based on intent."""
         subtasks = state.get("results", {}).get("subtasks", [])
 
+        # Get registered agents for routing options
+        available_tools = "\n".join([f"- {a['role']}: {a['semantic_description']}" for a in self.registry.list_all()])
+
         edges = []
         for task in subtasks:
-            # Simple keyword extraction for intent
-            intent = "search" if "search" in task.lower() else "analyze"
+            intent = "analyze" # Default intent
+
+            # Advanced Semantic Intent Extraction (Phase 2 Routing)
+            if self.llm:
+                prompt = f"Given the task: '{task}', determine the primary intent verb out of the available tools:\n{available_tools}\nRespond with only a single word (e.g., 'search', 'analyze', 'code')."
+                try:
+                    result = self.llm.invoke(prompt)
+                    intent = result.content.strip().lower()
+                except Exception as e:
+                    logger.error(f"LLM Intent Extraction failed: {e}. Falling back to default intent.")
+            else:
+                # Mock Intent Extraction
+                intent = "search" if "search" in task.lower() else "analyze"
 
             agents = self.route_intent(intent)
+
             if agents:
                 edges.append({
                     "task": task,
