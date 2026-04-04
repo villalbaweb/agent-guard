@@ -22,9 +22,10 @@ def get_llm() -> Optional[BaseChatModel]:
     if os.environ.get("GOOGLE_API_KEY"):
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI
-            # Use gemini-2.5-flash as the latest standard fast model (April 2026)
+            # Use the specified GEMINI_MODEL or fall back to the modern 3.1 Pro standard
+            model_name = os.environ.get("GEMINI_MODEL", "gemini-3.1-pro-preview")
             return ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash", 
+                model=model_name, 
                 temperature=0, 
                 google_api_key=os.environ.get("GOOGLE_API_KEY")
             )
