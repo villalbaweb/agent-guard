@@ -2,16 +2,36 @@ import os
 from typing import Optional
 from langchain_core.language_models.chat_models import BaseChatModel
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 def get_llm() -> Optional[BaseChatModel]:
     """
     Factory function to initialize the appropriate LLM based on environment variables.
 
     Supports:
-    - OpenAI (OPENAI_API_KEY)
+    - Google AI Studio (GOOGLE_API_KEY) - Recommended for Gemini
     - Anthropic (ANTHROPIC_API_KEY)
-    - Google Vertex AI (GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_API_KEY)
+    - OpenAI (OPENAI_API_KEY)
+    - Google Vertex AI (GOOGLE_APPLICATION_CREDENTIALS)
     """
-    # 1. Try Anthropic first if API key is set
+    # 1. Try Google AI Studio first (Gemini)
+    if os.environ.get("GOOGLE_API_KEY"):
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            # Use gemini-2.5-flash as the latest standard fast model (April 2026)
+            return ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash", 
+                temperature=0, 
+                google_api_key=os.environ.get("GOOGLE_API_KEY")
+            )
+        except ImportError:
+            pass
+
+    # 2. Try Anthropic
     if os.environ.get("ANTHROPIC_API_KEY"):
         try:
             from langchain_anthropic import ChatAnthropic
@@ -20,39 +40,16 @@ def get_llm() -> Optional[BaseChatModel]:
         except ImportError:
             pass
 
-    # 2. Try Vertex AI first if Google credentials or API key + Project ID are set
+    # 3. Try Vertex AI via Service Account
     if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
         try:
             from langchain_google_vertexai import ChatVertexAI
-            # Use gemini-1.5-flash as a default standard fast model for routing/policy
+            # Use gemini-1.5-flash as a default standard fast model
             return ChatVertexAI(model="gemini-1.5-flash", temperature=0)
         except ImportError:
             pass
 
-    if os.environ.get("VERTEX_API_KEY") and os.environ.get("VERTEX_PROJECT_ID"):
-        try:
-            from langchain_google_vertexai import ChatVertexAI
-            # Use gemini-1.5-flash as a default standard fast model for routing/policy
-            # Note: Location defaults to us-central1 if not provided
-            return ChatVertexAI(
-                model="gemini-1.5-flash", 
-                temperature=0, 
-                api_key=os.environ.get("VERTEX_API_KEY"),
-                project=os.environ.get("VERTEX_PROJECT_ID")
-            )
-        except ImportError:
-            pass
-
-    # 3. Try Gemini with API key
-    if os.environ.get("GOOGLE_API_KEY"):
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            # Use gemini-1.5-flash as a default standard fast model for routing/policy
-            return ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
-        except ImportError:
-            pass
-
-    # 4. Fall back to OpenAI if API key is set
+    # 4. Fall back to OpenAI
     if os.environ.get("OPENAI_API_KEY"):
         try:
             from langchain_openai import ChatOpenAI

@@ -15,21 +15,20 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def test_inference():
-    print("\n--- Starting Vertex AI Inference Test ---")
+    print("\n--- Starting Google AI Studio Inference Test ---")
     
-    # Ensure we are using the Vertex configuration
-    # Note: We don't mock here because we want to use the real .env values
-    if not os.environ.get("VERTEX_API_KEY") or not os.environ.get("VERTEX_PROJECT_ID"):
-        print("ERROR: VERTEX_API_KEY or VERTEX_PROJECT_ID not set in environment/.env")
+    # Ensure we are using the Google configuration
+    if not os.environ.get("GOOGLE_API_KEY"):
+        print("ERROR: GOOGLE_API_KEY not set in environment/.env")
+        print("Go to https://aistudio.google.com/ to get one.")
         sys.exit(1)
 
-    print(f"Project ID: {os.environ.get('VERTEX_PROJECT_ID')}")
     print("Initializing LLM...")
     
-    # Force the environment to prioritize Vertex by clearing others if they exist in .env
-    # This ensures get_llm() picks the Vertex path
+    # Force the environment to prioritize Google
     os.environ["ANTHROPIC_API_KEY"] = ""
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
+    os.environ["OPENAI_API_KEY"] = ""
     
     llm = get_llm()
     
@@ -38,10 +37,10 @@ def test_inference():
         sys.exit(1)
         
     print(f"LLM Class: {llm.__class__.__name__}")
-    print("Sending prompt: 'Say hello and confirm you are running via Vertex AI.'")
+    print("Sending prompt: 'Say hello and confirm you are running via Google AI Studio.'")
     
     try:
-        response = llm.invoke("Say hello and confirm you are running via Vertex AI.")
+        response = llm.invoke("Say hello and confirm you are running via Google AI Studio.")
         print("\n--- Response ---")
         print(response.content)
         print("----------------\n")
