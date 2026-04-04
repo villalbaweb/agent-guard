@@ -1,5 +1,11 @@
 import time
 import logging
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from agentguard import (
     AgentGuardState, MemoryManager, Registry, RecursiveExecutor
 )

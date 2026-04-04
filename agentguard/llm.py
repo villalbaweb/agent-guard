@@ -20,12 +20,26 @@ def get_llm() -> Optional[BaseChatModel]:
         except ImportError:
             pass
 
-    # 2. Try Vertex AI first if Google credentials are set
+    # 2. Try Vertex AI first if Google credentials or API key + Project ID are set
     if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
         try:
             from langchain_google_vertexai import ChatVertexAI
             # Use gemini-1.5-flash as a default standard fast model for routing/policy
             return ChatVertexAI(model="gemini-1.5-flash", temperature=0)
+        except ImportError:
+            pass
+
+    if os.environ.get("VERTEX_API_KEY") and os.environ.get("VERTEX_PROJECT_ID"):
+        try:
+            from langchain_google_vertexai import ChatVertexAI
+            # Use gemini-1.5-flash as a default standard fast model for routing/policy
+            # Note: Location defaults to us-central1 if not provided
+            return ChatVertexAI(
+                model="gemini-1.5-flash", 
+                temperature=0, 
+                api_key=os.environ.get("VERTEX_API_KEY"),
+                project=os.environ.get("VERTEX_PROJECT_ID")
+            )
         except ImportError:
             pass
 
