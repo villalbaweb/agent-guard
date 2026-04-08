@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 import logging
 from .state import AgentGuardState
-from .llm import get_llm
+from .llm import get_llm, normalize_llm_output
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,8 @@ class ExecutionPlanner:
                 prompt = f"Given the task: '{task}', determine the primary intent verb out of the available tools:\n{available_tools}\nRespond with only a single word (e.g., 'search', 'analyze', 'code')."
                 try:
                     result = self.llm.invoke(prompt)
-                    intent = result.content.strip().lower()
+                    content = normalize_llm_output(result.content)
+                    intent = content.strip().lower()
                 except Exception as e:
                     logger.error(f"LLM Intent Extraction failed: {e}. Falling back to default intent.")
             else:

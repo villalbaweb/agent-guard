@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import Optional, Any
 from langchain_core.language_models.chat_models import BaseChatModel
 
 try:
@@ -61,3 +61,25 @@ def get_llm() -> Optional[BaseChatModel]:
 
     # 5. No configuration found, return None (will use mock logic)
     return None
+
+def normalize_llm_output(content: Any) -> str:
+    """
+    Standardizes LLM output from various providers (Google, OpenAI, Anthropic) 
+    into a clean string. Handles cases where content might be a list of parts 
+    (modern Gemini/Vertex format).
+    """
+    if content is None:
+        return ""
+    
+    if isinstance(content, str):
+        return content
+    
+    if isinstance(content, list):
+        # Join text parts if it's a list of dicts or strings
+        return "".join([
+            part.get("text", "") if isinstance(part, dict) else str(part) 
+            for part in content
+        ])
+    
+    # Fallback for unexpected types
+    return str(content)

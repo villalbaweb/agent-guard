@@ -1,7 +1,7 @@
 from typing import Dict, Any, Tuple
 import logging
 from .state import AgentGuardState, GovernanceDecision
-from .llm import get_llm
+from .llm import get_llm, normalize_llm_output
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class PolicyEngine:
             prompt = f"Analyze if this action and intent violates basic safety rules (e.g. no hacking, no PII exposure, no harm). Respond with only 'ALLOW' or 'BLOCK'.\nAction: {action}\nIntent: {intent}"
             try:
                 result = self.llm.invoke(prompt)
-                content = result.content.strip().upper()
+                content = normalize_llm_output(result.content).strip().upper()
                 if "BLOCK" in content:
                     return False, GovernanceDecision(
                          action=action,
