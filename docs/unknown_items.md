@@ -24,8 +24,17 @@
 
 ---
 
+## Items Identified During Real-World Implementation (asset_management.py)
+
+| ID | Area | Status | Description | Resolution / Next Step |
+| :--- | :--- | :--- | :--- | :--- |
+| **U-11** | **Multi-Tenant Policy Scoping** | ⏳ Open | `PolicyEngine` loads a single `policy.yaml` at startup from `POLICY_FILE`. All runs on the same server share the same policy. This breaks SaaS deployments where different customers (e.g., an asset manager and a healthcare firm) need distinct rules, budgets, and HITL thresholds. The live demo exposed this: Meridian's OFAC sanctions rules and trade HITL only fire when `POLICY_FILE=examples/policy_meridian.yaml` is set — there is no per-request or per-tenant policy resolution. | **Three candidate strategies documented in TSD Section 12. Recommended path: policy-per-tenant at request time (Option A) for MVP, layered inheritance (Option B) for GA.** |
+| **U-12** | **Agent Registry — Static vs Dynamic** | ⏳ Open | The `Registry` is populated at server startup in `dependencies.py::get_registry()` — agents are hardcoded, not self-registering. In the Meridian demo, the 5-agent system was wired manually. A production marketplace needs agents to register at runtime (on pod startup, via REST call, or via SDK). `search_by_intent()` also uses substring matching, which degrades as the registry grows. | **Document customer interaction modes for the registry (TSD Section 11). Implement `POST /agents/register` endpoint and Redis-backed persistence in Milestone 6.** |
+
+---
+
 *Referenced Sections:*
 - *Implementation Plan: Phases 1–5*
-- *TSD: Section 6 (State Management)*
+- *TSD: Section 6 (State Management), Section 11 (Registry Pattern), Section 12 (Policy Scoping)*
 - *TSD: Section 8 (Security & Safety)*
 - *Modernization Doc: Section 8 (Remaining Gaps)*

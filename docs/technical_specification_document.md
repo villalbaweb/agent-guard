@@ -187,25 +187,227 @@ Run state machine: `queued → running → {completed | blocked | hitl_pending |
 - **Efficiency:** ~60% reduction in LLM calls for recursive sub-tasks compared to a full orchestrator call.
 - **Compliance:** 100% auditable reasoning chains for all tasks.
 
-## 11. Future Roadmap: Agentic Marketplace
+## 11. Agent Registry Pattern
+
+### 11.1 What the Registry Is
+
+The `Registry` is the system's "Yellow Pages" — a catalog of every agent and tool available for the executor to route work to. The `ExecutionPlanner` consults it when mapping a subtask to an agent: it extracts an intent verb from the subtask, searches the registry, and routes to the best match.
+
+Every registered agent has five metadata fields:
+
+| Field | Purpose | Example |
+|:------|:--------|:--------|
+| `id` | Stable unique identifier | `"trade_execution_agent"` |
+| `role` | Human-readable capability label | `"Trade Execution Specialist"` |
+| `semantic_description` | Full prose description — the text the intent router embeds for similarity search | `"Constructs FIX order tickets, routes to execution venues..."` |
+| `input_schema` | Expected inputs (used for validation and prompt construction) | `{"ticker": "string", "quantity": "int"}` |
+| `output_schema` | Output contract | `{"order_id": "string", "fill_price": "float"}` |
+| `endpoint` | Optional HTTP endpoint for remote agents | `"https://agents.internal/trade"` |
+
+### 11.2 Agent Lifecycle
+
+```
+Agent pod starts up
+       │
+       ▼
+registry.register(id, role, description, schemas)   ← today: called at server init
+       │                                                future: POST /agents/register
+       ▼
+ExecutionPlanner.plan() called for a subtask
+       │
+       ├── LLM extracts intent verb ("execute", "analyze", "search", ...)
+       │
+       ├── registry.search_by_intent(intent)
+       │     current: substring match on role + semantic_description
+       │     future:  cosine similarity on embedded semantic_description (U-09)
+       │
+       └── returns ranked agent list → executor picks agents[0]
+                  │
+                  ▼
+       PolicyEngine.check_step(action="invoke_{agent_id}", intent=...)
+                  │
+          ALLOW → executor invokes agent (LLM call or HTTP call)
+          BLOCK → step denied, trace event emitted
+          HITL  → graph pauses, waits for human approval
+```
+
+### 11.3 Current Limitations
+
+- **Static registration:** agents are hardcoded in `dependencies.py::get_registry()` at server startup. No self-registration or hot-add.
+- **Substring matching:** `search_by_intent()` does a case-insensitive substring scan — accurate with 2–3 agents, degrades with 10+.
+- **No persistence:** registry lives in-memory; restarting the server loses all registrations.
+- **No agent health:** no liveness check; a registered agent with a dead endpoint is not removed.
+
+These are tracked as **U-09** and **U-12** in `unknown_items.md`.
+
+---
+
+## 12. Customer Interaction Modes
+
+Customers interact with AgentGuard through four distinct surfaces, each targeting a different persona.
+
+### 12.1 REST API — Language-Agnostic Clients
+
+The primary integration point for production systems. Any language, any platform.
+
+```
+# Submit a task
+POST /runs
+{
+  "task": "Analyze MSFT Q3 earnings and update price target",
+  "subject": "s.okafor@meridian.com",
+  "budget_override": {"max_cost_usd": 2.00},
+  "max_depth": 2
+}
+→ 202 { "run_id": "run_abc123", "status": "running" }
+
+# Poll status
+GET /runs/run_abc123
+→ 200 { "status": "completed", "final_answer": "...", "total_cost_usd": 0.42 }
+
+# Download full audit trace
+GET /runs/run_abc123/trace
+→ 200 { "schema_version": "1.0", "events": [...], "edges": [...] }
+
+# Approve a paused HITL step (requires approver JWT role)
+POST /runs/run_abc123/approve
+Authorization: Bearer <approver_jwt>
+{ "event_id": "evt_009", "approved_by": "c.reyes@meridian.com", "decision": "approve" }
+→ 200 { "status": "resumed" }
+```
+
+**Target persona:** Platform/DevOps teams, non-Python services, web UIs.
+
+---
+
+### 12.2 Python SDK — Direct Integration
+
+Import `agentguard` directly and compose the governance layer in code. Full control over the registry, state, and graph lifecycle.
+
+```python
+from agentguard import AgentGuardState, MemoryManager, Registry, RecursiveExecutor
+from agentguard.auth import make_auth_context
+
+# Build the agent registry for your domain
+registry = Registry()
+registry.register(
+    item_id="fundamental_analyst",
+    role="Fundamental Analyst",
+    semantic_description="Analyzes SEC filings and produces buy/hold/sell ratings.",
+    input_schema={"ticker": "string"},
+    output_schema={"rating": "string", "price_target": "float"},
+)
+
+# Create caller identity
+auth = make_auth_context("s.okafor@meridian.com", roles=["analyst", "approver"])
+
+# Build and run the graph
+memory   = MemoryManager()
+executor = RecursiveExecutor(memory_manager=memory, registry=registry, max_depth=2)
+graph    = executor.build_graph()
+
+state = AgentGuardState(
+    task="Analyze MSFT Q3 earnings and update price target",
+    subject=auth.subject,
+    root_task_id="run_001",
+    parent_node_id="root",
+    depth=0,
+    results={},
+    all_agents=[], all_edges=[],
+    global_signal="",
+    usage_stats={"total_cost": 0.0},
+    budget_config={"max_cost_usd": 2.00},
+    governance_decisions=[],
+    trace_events=[],
+    auth_context=auth.to_dict(),
+    parent_trace_event_id=None,
+)
+
+final = graph.invoke(state)
+print(final["results"]["final_answer"])
+```
+
+**Target persona:** Python ML/AI engineers embedding governance into existing pipelines.
+
+---
+
+### 12.3 Policy YAML — Declarative Governance
+
+Governance rules are owned by compliance teams, not engineers. No code change required to add, modify, or disable a rule — edit `policy.yaml` and call `POST /policy/reload`.
+
+```yaml
+# policy.yaml — compliance team owns this file
+budget:
+  max_cost_usd: 5.00
+  per_step_limit_usd: 1.50
+
+content_rules:
+  - id: block_sanctioned_entities
+    field: intent
+    operator: contains
+    values: [novatek, sberbank, gazprom]
+    action: block
+    reason: "OFAC sanctions list match."
+
+  - id: hitl_large_trades
+    field: action
+    operator: contains
+    values: [execute_trade, submit_order]
+    action: require_hitl
+    reason: "Trade execution requires compliance pre-clearance."
+```
+
+Hot-reload without restart:
+```
+POST /policy/reload  →  { "reloaded": true, "rules_count": 6 }
+```
+
+**Target persona:** Compliance officers, legal teams, security engineers.
+
+---
+
+### 12.4 Policy Scoping — Per-Tenant Rules (Planned — U-11)
+
+Today, one `policy.yaml` applies to all runs on a server. Three architectural paths are being evaluated for multi-tenant isolation:
+
+**Option A — Policy-per-tenant at request time (Recommended MVP)**
+`RunCreateRequest` adds a `policy_id` field. The backend resolves `policies/{tenant_id}.yaml` when building the executor for that run. Lowest complexity; maps cleanly to the existing `POLICY_FILE` env var pattern.
+
+```
+POST /runs
+{
+  "task": "...",
+  "policy_id": "meridian-capital"   ← new field
+}
+→ PolicyEngine loads policies/meridian-capital.yaml for this run only
+```
+
+**Option B — Layered inheritance (Recommended GA)**
+A base platform policy (PII, budget floor, offensive-security block) applies to all tenants and cannot be overridden. A tenant overlay adds domain-specific rules on top. Prevents tenants from disabling platform-level safeguards — critical for SaaS liability.
+
+```
+platform_base.yaml          ← immutable platform rules (PII, sanctions, budget floor)
+    └── meridian.yaml       ← tenant overlay (adds HITL thresholds, OFAC list)
+        └── desk_pm.yaml    ← role overlay (senior PM gets higher budget cap)
+```
+
+**Option C — Agent-declared policy (Future)**
+Each agent declares its own required policy constraints at registration time. The `PolicyEngine` merges agent-level rules with the global policy at routing time. Most powerful — enables marketplace agents from third-party vendors to bring their own compliance posture. Highest implementation complexity; deferred to post-GA.
+
+---
+
+## 13. Future Roadmap: Agentic Marketplace
+
 Beyond the MVP, AgentGuard aims to implement the **Contract-Net Marketplace** pattern for dynamic, market-driven task allocation.
-- **Bidding System:** Agents will respond to task announcements with "Bids" containing their model confidence, estimated USD cost, and ETA.
-- **Utility Selection:** The Orchestrator will award tasks based on a dynamic utility function, allowing for real-time trade-offs between cost, quality, and speed.
-- **Distributed Negotiation:** Enables the system to scale across diverse, heterogeneous pools of specialized agents with fluctuating availability.
+
+- **Bidding System:** Agents respond to task announcements with "Bids" containing their model confidence, estimated USD cost, and ETA.
+- **Utility Selection:** The Orchestrator awards tasks based on a dynamic utility function — real-time trade-offs between cost, quality, and speed.
+- **Distributed Negotiation:** Enables scaling across diverse, heterogeneous pools of specialized agents with fluctuating availability.
+- **Agent self-registration:** `POST /agents/register` replaces static `dependencies.py` wiring; agents register on pod startup and deregister on shutdown.
+- **Vector search routing:** `search_by_intent()` replaced with cosine similarity against embedded `semantic_description` fields (Redis VSS or pgvector).
 
 ---
-*Patterns Referenced:*
-- *Causal Dependency Graph [NotebookLM]*
-- *Pass-by-Reference Context [NotebookLM]*
-- *Watchdog Timeout Supervisor [NotebookLM]*
-- *Adaptive Retry with Prompt Mutation [NotebookLM]*
-- *Capability Registry & Agent Router [NotebookLM]*
-- *Contract-Net Marketplace [NotebookLM]*
-**Bidding System:** Agents will respond to task announcements with "Bids" containing their model confidence, estimated USD cost, and ETA.
-- **Utility Selection:** The Orchestrator will award tasks based on a dynamic utility function, allowing for real-time trade-offs between cost, quality, and speed.
-- **Distributed Negotiation:** Enables the system to scale across diverse, heterogeneous pools of specialized agents with fluctuating availability.
 
----
 *Patterns Referenced:*
 - *Causal Dependency Graph [NotebookLM]*
 - *Pass-by-Reference Context [NotebookLM]*
