@@ -1,0 +1,232 @@
+{
+  "schema_version": "1.0",
+  "run_id": "poc_budget_cap_enforcement",
+  "task": "Research global supply chain disruptions and their economic impact",
+  "started_at": "2026-04-11T02:54:12.248489+00:00",
+  "finished_at": "2026-04-11T02:54:30.641795+00:00",
+  "total_duration_ms": 18393,
+  "total_cost_usd": 0.0,
+  "final_status": "completed",
+  "final_answer": "Identify major recent global supply chain disruptions: BLOCKED: [subject:anonymous] Budget exhausted: $0.0500 > $0.04. | Analyze the economic impact of identified disruptions: BLOCKED: [subject:anonymous] Budget exhausted: $0.0500 > $0.04. | Summarize findings into a concise report: BLOCKED: [subject:anonymous] Budget exhausted: $0.0500 > $0.04.",
+  "policy_version": "1.0",
+  "llm_providers": {},
+  "events": [
+    {
+      "event_id": "c66a8968-4768-4b77-ae52-bbf099a6ec1c",
+      "parent_event_id": null,
+      "run_id": "poc_budget_cap_enforcement",
+      "node": "preflight",
+      "depth": 0,
+      "timestamp": "2026-04-11T02:54:12.249209+00:00",
+      "duration_ms": 0,
+      "agent_id": null,
+      "action": "start_task",
+      "intent": "Research global supply chain disruptions and their economic impact",
+      "decision": {
+        "action": "start_task",
+        "allowed": true,
+        "reason": "[subject:anonymous] Preflight passed.",
+        "cost": 0.0,
+        "hitl_required": false
+      },
+      "cost_delta": 0.0,
+      "cumulative_cost": 0.0,
+      "status": "ok",
+      "metadata": {}
+    },
+    {
+      "event_id": "5cf93b18-4090-4b2e-92a5-9f25004bf772",
+      "parent_event_id": "c66a8968-4768-4b77-ae52-bbf099a6ec1c",
+      "run_id": "poc_budget_cap_enforcement",
+      "node": "decompose",
+      "depth": 0,
+      "timestamp": "2026-04-11T02:54:18.019463+00:00",
+      "duration_ms": 5769,
+      "agent_id": null,
+      "action": "decompose_task",
+      "intent": "Research global supply chain disruptions and their economic impact",
+      "decision": null,
+      "cost_delta": 0.0,
+      "cumulative_cost": 0.0,
+      "status": "ok",
+      "metadata": {
+        "subtasks": []
+      }
+    },
+    {
+      "event_id": "65ce9635-60cd-40cd-87b9-a570b3770d72",
+      "parent_event_id": "5cf93b18-4090-4b2e-92a5-9f25004bf772",
+      "run_id": "poc_budget_cap_enforcement",
+      "node": "plan",
+      "depth": 0,
+      "timestamp": "2026-04-11T02:54:30.640126+00:00",
+      "duration_ms": 12620,
+      "agent_id": null,
+      "action": "assign_agents",
+      "intent": null,
+      "decision": null,
+      "cost_delta": 0.0,
+      "cumulative_cost": 0.0,
+      "status": "ok",
+      "metadata": {
+        "edges": [
+          {
+            "task": "Identify major recent global supply chain disruptions",
+            "agent_id": "search_agent_01"
+          },
+          {
+            "task": "Analyze the economic impact of identified disruptions",
+            "agent_id": "analysis_agent_01"
+          },
+          {
+            "task": "Summarize findings into a concise report",
+            "agent_id": "analysis_agent_01"
+          }
+        ]
+      }
+    },
+    {
+      "event_id": "8d71944d-b765-4f9d-9c20-d243774a4d38",
+      "parent_event_id": "65ce9635-60cd-40cd-87b9-a570b3770d72",
+      "run_id": "poc_budget_cap_enforcement",
+      "node": "execute_subtasks",
+      "depth": 0,
+      "timestamp": "2026-04-11T02:54:30.640608+00:00",
+      "duration_ms": null,
+      "agent_id": null,
+      "action": "execute_subtasks",
+      "intent": null,
+      "decision": null,
+      "cost_delta": 0.0,
+      "cumulative_cost": 0.0,
+      "status": "ok",
+      "metadata": {
+        "edge_count": 3
+      }
+    },
+    {
+      "event_id": "5da41dcb-1557-4b0f-9da2-109778adfa66",
+      "parent_event_id": "8d71944d-b765-4f9d-9c20-d243774a4d38",
+      "run_id": "poc_budget_cap_enforcement",
+      "node": "execute_subtasks",
+      "depth": 0,
+      "timestamp": "2026-04-11T02:54:30.640669+00:00",
+      "duration_ms": null,
+      "agent_id": "search_agent_01",
+      "action": "invoke_search_agent_01",
+      "intent": "Search Specialist performing: Identify major recent global supply chain disruptions",
+      "decision": {
+        "action": "invoke_search_agent_01",
+        "allowed": false,
+        "reason": "[subject:anonymous] Budget exhausted: $0.0500 > $0.04.",
+        "cost": 0.0,
+        "hitl_required": false
+      },
+      "cost_delta": 0.0,
+      "cumulative_cost": 0.0,
+      "status": "blocked",
+      "metadata": {
+        "auth_subject": "anonymous"
+      }
+    },
+    {
+      "event_id": "b7b8933d-ba0e-4654-a4d5-2f656af84418",
+      "parent_event_id": "8d71944d-b765-4f9d-9c20-d243774a4d38",
+      "run_id": "poc_budget_cap_enforcement",
+      "node": "execute_subtasks",
+      "depth": 0,
+      "timestamp": "2026-04-11T02:54:30.640904+00:00",
+      "duration_ms": null,
+      "agent_id": "analysis_agent_01",
+      "action": "invoke_analysis_agent_01",
+      "intent": "Data Analyst performing: Analyze the economic impact of identified disruptions",
+      "decision": {
+        "action": "invoke_analysis_agent_01",
+        "allowed": false,
+        "reason": "[subject:anonymous] Budget exhausted: $0.0500 > $0.04.",
+        "cost": 0.0,
+        "hitl_required": false
+      },
+      "cost_delta": 0.0,
+      "cumulative_cost": 0.0,
+      "status": "blocked",
+      "metadata": {
+        "auth_subject": "anonymous"
+      }
+    },
+    {
+      "event_id": "45b0fcbf-ba74-40f5-afe7-008b194a221b",
+      "parent_event_id": "8d71944d-b765-4f9d-9c20-d243774a4d38",
+      "run_id": "poc_budget_cap_enforcement",
+      "node": "execute_subtasks",
+      "depth": 0,
+      "timestamp": "2026-04-11T02:54:30.641073+00:00",
+      "duration_ms": null,
+      "agent_id": "analysis_agent_01",
+      "action": "invoke_analysis_agent_01",
+      "intent": "Data Analyst performing: Summarize findings into a concise report",
+      "decision": {
+        "action": "invoke_analysis_agent_01",
+        "allowed": false,
+        "reason": "[subject:anonymous] Budget exhausted: $0.0500 > $0.04.",
+        "cost": 0.0,
+        "hitl_required": false
+      },
+      "cost_delta": 0.0,
+      "cumulative_cost": 0.0,
+      "status": "blocked",
+      "metadata": {
+        "auth_subject": "anonymous"
+      }
+    },
+    {
+      "event_id": "82caaa96-5917-49ea-91fe-961aa8752f18",
+      "parent_event_id": "45b0fcbf-ba74-40f5-afe7-008b194a221b",
+      "run_id": "poc_budget_cap_enforcement",
+      "node": "synthesize",
+      "depth": 0,
+      "timestamp": "2026-04-11T02:54:30.641603+00:00",
+      "duration_ms": 0,
+      "agent_id": null,
+      "action": "synthesize_results",
+      "intent": null,
+      "decision": null,
+      "cost_delta": 0.0,
+      "cumulative_cost": 0.0,
+      "status": "ok",
+      "metadata": {
+        "answer_length": 347
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "c66a8968-4768-4b77-ae52-bbf099a6ec1c",
+      "to": "5cf93b18-4090-4b2e-92a5-9f25004bf772"
+    },
+    {
+      "from": "5cf93b18-4090-4b2e-92a5-9f25004bf772",
+      "to": "65ce9635-60cd-40cd-87b9-a570b3770d72"
+    },
+    {
+      "from": "65ce9635-60cd-40cd-87b9-a570b3770d72",
+      "to": "8d71944d-b765-4f9d-9c20-d243774a4d38"
+    },
+    {
+      "from": "8d71944d-b765-4f9d-9c20-d243774a4d38",
+      "to": "5da41dcb-1557-4b0f-9da2-109778adfa66"
+    },
+    {
+      "from": "8d71944d-b765-4f9d-9c20-d243774a4d38",
+      "to": "b7b8933d-ba0e-4654-a4d5-2f656af84418"
+    },
+    {
+      "from": "8d71944d-b765-4f9d-9c20-d243774a4d38",
+      "to": "45b0fcbf-ba74-40f5-afe7-008b194a221b"
+    },
+    {
+      "from": "45b0fcbf-ba74-40f5-afe7-008b194a221b",
+      "to": "82caaa96-5917-49ea-91fe-961aa8752f18"
+    }
+  ]
+}

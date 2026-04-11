@@ -10,7 +10,10 @@
       "Bash(docker exec:*)",
       "Bash(uv run:*)",
       "Bash(PYTHONPATH=. uv run python agentguard/poc.py)",
-      "Bash(uv pip:*)"
+      "Bash(uv pip:*)",
+      "Bash(ls:*)",
+      "Bash(Get-Content \"D:\\\\Git\\\\agent-guard\\\\docs\\\\testing_guide.md\")",
+      "Bash(Measure-Object -Line)"
     ]
   }
 }

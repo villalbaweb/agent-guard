@@ -168,6 +168,32 @@ class MemoryManager:
         return self._get(self._key_blueprints(run_id))
 
     # ------------------------------------------------------------------ #
+    #  Run state helpers (Step B — REST API)                              #
+    # ------------------------------------------------------------------ #
+
+    def _key_run(self, run_id: str) -> str:
+        return f"run:{run_id}:state"
+
+    def _key_trace(self, run_id: str) -> str:
+        return f"run:{run_id}:trace"
+
+    def store_run(self, run_id: str, state: Any):
+        """Persist a complete AgentGuardState dict under run:{run_id}:state."""
+        self._set(self._key_run(run_id), state)
+
+    def get_run(self, run_id: str) -> Optional[Any]:
+        """Retrieve a stored AgentGuardState dict, or None if not found."""
+        return self._get(self._key_run(run_id))
+
+    def store_trace(self, run_id: str, trace_doc: Any):
+        """Persist a serialized trace JSON document under run:{run_id}:trace."""
+        self._set(self._key_trace(run_id), trace_doc)
+
+    def get_trace(self, run_id: str) -> Optional[Any]:
+        """Retrieve a stored trace document, or None if not found."""
+        return self._get(self._key_trace(run_id))
+
+    # ------------------------------------------------------------------ #
     #  Generic key/value (for telemetry and ad-hoc state)                 #
     # ------------------------------------------------------------------ #
 

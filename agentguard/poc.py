@@ -8,6 +8,8 @@ Validates all three wedge use cases end-to-end:
   4. Budget cap → step execution halted mid-run
   5. Semantic loop detection → repeated intent caught via embeddings
 
+Produces ./traces/{run_id}.json for every scenario (Step A).
+
 Usage:
   PYTHONPATH=. uv run python agentguard/poc.py
 """
@@ -22,6 +24,8 @@ except ImportError:
 
 from agentguard import AgentGuardState, MemoryManager, Registry, RecursiveExecutor
 from agentguard.llm import get_embeddings
+from agentguard.auth import anonymous_context
+from agentguard import trace as tracer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,10 +70,13 @@ def run_scenario(
     executor = RecursiveExecutor(memory_manager=memory, registry=registry, max_depth=2)
     graph = executor.build_graph()
 
+    run_id = f"poc_{label.replace(' ', '_').lower()}"
+    auth_ctx = anonymous_context()
+
     state = AgentGuardState(
         task=task,
         subject="PoC Run",
-        root_task_id=f"poc_{label.replace(' ', '_').lower()}",
+        root_task_id=run_id,
         parent_node_id="root",
         depth=0,
         results={},
@@ -79,11 +86,16 @@ def run_scenario(
         usage_stats={"total_cost": 0.0},
         budget_config=budget_override or {},
         governance_decisions=[],
+        trace_events=[],
+        auth_context=auth_ctx.to_dict(),
+        parent_trace_event_id=None,
     )
 
+    started_at = tracer._now_iso()
     t0 = time.time()
     final = graph.invoke(state)
     latency = time.time() - t0
+    finished_at = tracer._now_iso()
 
     decisions = final.get("governance_decisions", [])
     blocks = [d for d in decisions if not d["allowed"] and not d.get("hitl_required")]
@@ -94,6 +106,7 @@ def run_scenario(
     logger.info(f"  Latency  : {latency:.3f}s")
     logger.info(f"  Cost     : ${final.get('usage_stats', {}).get('total_cost', 0):.4f}")
     logger.info(f"  Decisions: {len(decisions)} total | {len(allows)} allowed | {len(blocks)} blocked | {len(hitls)} HITL")
+    logger.info(f"  Events   : {len(final.get('trace_events', []))} trace events")
 
     for d in decisions:
         if d.get("hitl_required"):
@@ -107,6 +120,28 @@ def run_scenario(
     answer = str(final.get("results", {}).get("final_answer", "")).strip()
     if answer:
         logger.info(f"  Answer   : {answer[:300]}")
+
+    # Determine final status
+    signal = final.get("global_signal", "")
+    if "REJECT" in signal:
+        final_status = "blocked"
+    elif "HITL" in signal:
+        final_status = "hitl_pending"
+    elif "DONE" in signal:
+        final_status = "completed"
+    else:
+        final_status = "completed"
+
+    # Write trace artifact (Step A)
+    t = tracer.dump(
+        state=final,
+        task=task,
+        started_at=started_at,
+        finished_at=finished_at,
+        final_status=final_status,
+    )
+    path = tracer.write_to_disk(t)
+    logger.info(f"  Trace    : {path}")
 
     return final
 
@@ -126,7 +161,6 @@ def run_poc():
 
     # ------------------------------------------------------------------ #
     # Scenario 1: Normal multi-step research task
-    # Expected: preflight ALLOW, subtasks decomposed by LLM, steps execute
     # ------------------------------------------------------------------ #
     run_scenario(
         label="Normal Research Task",
@@ -137,7 +171,6 @@ def run_poc():
 
     # ------------------------------------------------------------------ #
     # Scenario 2: Forbidden topic — offensive security
-    # Expected: blocked at preflight by YAML keyword rule, 0ms, 0 API calls
     # ------------------------------------------------------------------ #
     run_scenario(
         label="Forbidden Topic Block",
@@ -148,7 +181,6 @@ def run_poc():
 
     # ------------------------------------------------------------------ #
     # Scenario 3: PII in task
-    # Expected: blocked at preflight by YAML regex rule, 0ms, 0 API calls
     # ------------------------------------------------------------------ #
     run_scenario(
         label="PII Detection",
@@ -159,25 +191,24 @@ def run_poc():
 
     # ------------------------------------------------------------------ #
     # Scenario 4: Budget cap enforcement
-    # Expected: first step(s) allowed, subsequent steps blocked when cap hit
     # ------------------------------------------------------------------ #
     run_scenario(
         label="Budget Cap Enforcement",
         task="Research global supply chain disruptions and their economic impact",
         registry=registry,
         memory=memory,
-        budget_override={"max_cost_usd": 0.04},  # lower than one step (0.05)
+        budget_override={"max_cost_usd": 0.04},
     )
 
     # ------------------------------------------------------------------ #
-    # Scenario 5: Semantic loop detection
-    # Expected: identical intent submitted twice → second call blocked by embeddings
+    # Scenario 5: Semantic loop detection (direct policy test)
     # ------------------------------------------------------------------ #
     logger.info(f"\n{SEPARATOR}")
     logger.info("SCENARIO : Semantic Loop Detection (direct)")
     logger.info(SEPARATOR)
 
     from agentguard.policy import PolicyEngine
+    from agentguard.auth import anonymous_context as anon
     loop_memory = MemoryManager()
     loop_policy = PolicyEngine(loop_memory)
     loop_state = AgentGuardState(
@@ -193,6 +224,9 @@ def run_poc():
         usage_stats={"total_cost": 0.0},
         budget_config={},
         governance_decisions=[],
+        trace_events=[],
+        auth_context=anon().to_dict(),
+        parent_trace_event_id=None,
     )
 
     for i in range(1, 4):

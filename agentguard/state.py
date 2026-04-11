@@ -1,4 +1,4 @@
-from typing import TypedDict, Dict, List, Any
+from typing import TypedDict, Dict, List, Any, Optional
 
 
 class GovernanceDecision(TypedDict):
@@ -22,3 +22,6 @@ class AgentGuardState(TypedDict):
     usage_stats: Dict[str, float]
     budget_config: Dict[str, float]
     governance_decisions: List[GovernanceDecision]
+    trace_events: List[Dict[str, Any]]   # append-only causal event log (Step A)
+    auth_context: Dict[str, Any]         # JWT-derived caller identity (Step C)
+    parent_trace_event_id: Optional[str] # event_id of the parent graph's execute_subtasks event

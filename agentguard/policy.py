@@ -153,11 +153,14 @@ class PolicyEngine:
         reason: str,
         cost: float = 0.0,
         hitl_required: bool = False,
+        auth_subject: str = "unknown",
     ) -> GovernanceDecision:
+        # Include auth subject in audit trail (Step C)
+        audit_reason = f"[subject:{auth_subject}] {reason}" if auth_subject != "unknown" else reason
         return GovernanceDecision(
             action=action,
             allowed=allowed,
-            reason=reason,
+            reason=audit_reason,
             cost=cost,
             hitl_required=hitl_required,
         )
@@ -166,19 +169,25 @@ class PolicyEngine:
     #  Public API                                                          #
     # ------------------------------------------------------------------ #
 
+    def _auth_subject(self, state: AgentGuardState) -> str:
+        """Extract the caller subject from auth_context for audit logging."""
+        ctx = state.get("auth_context", {})
+        return ctx.get("subject", "unknown") if ctx else "unknown"
+
     def check_preflight(self, state: AgentGuardState) -> Tuple[bool, GovernanceDecision]:
         """Validates the top-level task before execution begins."""
         task = state.get("task", "")
         intent = task  # treat full task text as the intent for preflight
+        subject = self._auth_subject(state)
 
         allowed, hitl, reason = self._evaluate_rules(action="start_task", intent=intent)
         if not allowed:
             return False, self._make_decision(
-                "start_task", False, reason, hitl_required=hitl
+                "start_task", False, reason, hitl_required=hitl, auth_subject=subject
             )
 
         return True, self._make_decision(
-            "start_task", True, "Preflight passed.", cost=0.0
+            "start_task", True, "Preflight passed.", cost=0.0, auth_subject=subject
         )
 
     def check_step(
@@ -194,6 +203,7 @@ class PolicyEngine:
         # State-level budget_config overrides policy.yaml (allows per-run limits)
         max_cost = state_budget.get("max_cost_usd") or budget_cfg.get("max_cost_usd", 10.0)
         per_step_limit = state_budget.get("per_step_limit_usd") or budget_cfg.get("per_step_limit_usd", 1.0)
+        subject = self._auth_subject(state)
 
         # 1. Per-step cost ceiling (catches runaway single calls)
         if cost_estimate > per_step_limit:
@@ -201,6 +211,7 @@ class PolicyEngine:
                 action,
                 False,
                 f"Step cost ${cost_estimate:.4f} exceeds per-step limit ${per_step_limit:.2f}.",
+                auth_subject=subject,
             )
 
         # 2. Cumulative budget check
@@ -210,13 +221,14 @@ class PolicyEngine:
                 action,
                 False,
                 f"Budget exhausted: ${current_cost + cost_estimate:.4f} > ${max_cost:.2f}.",
+                auth_subject=subject,
             )
 
         # 3. Content rules (regex + keyword)
         allowed, hitl, reason = self._evaluate_rules(action=action, intent=intent)
         if not allowed:
             return False, self._make_decision(
-                action, False, reason, hitl_required=hitl
+                action, False, reason, hitl_required=hitl, auth_subject=subject
             )
 
         # 4. LLM semantic safety (optional — only runs if LLM is configured)
@@ -241,13 +253,15 @@ class PolicyEngine:
                         action,
                         False,
                         "LLM semantic guard: safety violation detected.",
+                        auth_subject=subject,
                     )
             except Exception as e:
                 logger.error(
                     f"LLM policy check failed: {e}. Failing closed for safety."
                 )
                 return False, self._make_decision(
-                    action, False, "Safety check service unavailable — failing closed."
+                    action, False, "Safety check service unavailable — failing closed.",
+                    auth_subject=subject,
                 )
 
         # 5. Loop detection (delegates to MemoryManager)
@@ -261,10 +275,11 @@ class PolicyEngine:
                 lookback_window=loop_cfg.get("lookback_window", 5),
             ):
                 return False, self._make_decision(
-                    action, False, "Loop detected: agent is repeating a prior step."
+                    action, False, "Loop detected: agent is repeating a prior step.",
+                    auth_subject=subject,
                 )
             self.memory.record_thought(state.get("root_task_id", "default"), thought)
 
         return True, self._make_decision(
-            action, True, "Step allowed.", cost=cost_estimate
+            action, True, "Step allowed.", cost=cost_estimate, auth_subject=subject
         )
