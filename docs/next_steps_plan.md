@@ -1,10 +1,12 @@
 # AgentGuard: Next Steps Implementation Plan
 
+> **Status (2026-04-10): Steps A, B, and C are fully COMPLETE.** All acceptance criteria below are checked off. See `implementation_report.md` for the detailed delivery report.
+
 This document lays out the concrete implementation plan for the next three milestones on the AgentGuard roadmap, in execution order:
 
-1. **Step A — Causal Dependency Graph Export** (Phase 4 closeout)
-2. **Step B — REST API (FastAPI)** (Milestone 5, customer interface)
-3. **Step C — HITL Wiring & JWT Identity Propagation** (resolves U-04 and U-05)
+1. **Step A — Causal Dependency Graph Export** (Phase 4 closeout) ✅
+2. **Step B — REST API (FastAPI)** (Milestone 5, customer interface) ✅
+3. **Step C — HITL Wiring & JWT Identity Propagation** (resolves U-04 and U-05) ✅
 
 Each step is designed so the next one builds on its output:
 - Step A produces the JSON trace artifact that Step B will expose over HTTP.
@@ -85,11 +87,11 @@ class TraceEvent(TypedDict):
 - **Schema validation:** Add one golden-file test per PoC scenario; compare structural keys (not values — costs/timestamps are non-deterministic).
 
 ### Acceptance Criteria
-- [ ] `AgentGuardState.trace_events` populated end-to-end in all 5 PoC scenarios
-- [ ] `./traces/{run_id}.json` produced for every run, conforming to schema
-- [ ] Every `governance_decision` in the state has a corresponding event in the trace
-- [ ] Trace JSON is valid and parseable by `json.loads()`
-- [ ] At least one test asserts parent/child causality for a recursive child graph
+- [x] `AgentGuardState.trace_events` populated end-to-end in all 5 PoC scenarios
+- [x] `./traces/{run_id}.json` produced for every run, conforming to schema
+- [x] Every `governance_decision` in the state has a corresponding event in the trace
+- [x] Trace JSON is valid and parseable by `json.loads()`
+- [x] At least one test asserts parent/child causality for a recursive child graph
 
 ---
 
@@ -169,12 +171,12 @@ class RunStatusResponse(BaseModel):
 - **Load:** Deferred to Phase 5 (10 concurrent runs, measure p95 latency).
 
 ### Acceptance Criteria
-- [ ] `uv run uvicorn backend.main:app` serves a working API on :8000
-- [ ] All 5 PoC scenarios runnable via `POST /runs` with matching results
-- [ ] `/runs/{id}/trace` returns valid JSON matching Step A schema
-- [ ] `POST /policy/reload` reloads rules without dropping in-flight runs
-- [ ] `docker-compose.poc.yml up` brings up Redis + backend + healthcheck green
-- [ ] OpenAPI docs render at `/docs`
+- [x] `uv run uvicorn backend.main:app` serves a working API on :8000
+- [x] All 5 PoC scenarios runnable via `POST /runs` with matching results
+- [x] `/runs/{id}/trace` returns valid JSON matching Step A schema
+- [x] `POST /policy/reload` reloads rules without dropping in-flight runs
+- [x] `docker-compose.poc.yml up` brings up Redis + backend + healthcheck green
+- [x] OpenAPI docs render at `/docs`
 
 ---
 
@@ -245,14 +247,14 @@ JWT claims: `sub`, `tenant`, `roles`, `iat`, `exp`, `jti`, `iss`.
 - **Negative:** Approval with wrong role → 403. Approval with expired JWT → 401. Approval on non-pending run → 409.
 
 ### Acceptance Criteria
-- [ ] `require_hitl` rule actually pauses a real graph run (not just sets a field)
-- [ ] Run state survives an API process restart (checkpointer proven)
-- [ ] `/runs/{id}/approve` resumes the graph and the run reaches `completed`
-- [ ] Every resumed step's trace event includes `approved_by` subject
-- [ ] Child subgraphs see the same `auth_context` as the root
-- [ ] Expired JWTs cannot start a run and cannot approve a pending one
-- [ ] Test suite covers JWT happy path, role mismatch, expiry, and full HITL cycle
-- [ ] Update every relevant doc within @docs to reflect the changes in this plan
+- [x] `require_hitl` rule actually pauses a real graph run (not just sets a field)
+- [x] Run state survives an API process restart (checkpointer proven)
+- [x] `/runs/{id}/approve` resumes the graph and the run reaches `completed`
+- [x] Every resumed step's trace event includes `approved_by` subject
+- [x] Child subgraphs see the same `auth_context` as the root
+- [x] Expired JWTs cannot start a run and cannot approve a pending one
+- [x] Test suite covers JWT happy path, role mismatch, expiry, and full HITL cycle
+- [x] Update every relevant doc within @docs to reflect the changes in this plan
 
 ---
 

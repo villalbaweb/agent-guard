@@ -54,14 +54,19 @@ Implements the **Fractal Chain-of-Thought (FCoT)** and **Supervisor** patterns.
 - Child graphs spawned at `depth < max_depth - 1`; share parent `root_task_id` and budget.
 - Cost tracking accumulates only for allowed steps.
 
-### 🔄 Phase 4: Telemetry & Observability (Partial)
+### ✅ Phase 4: Telemetry & Observability
 - Governance decisions recorded per-step in `AgentGuardState.governance_decisions`.
 - Structured log output with `[ALLOW]` / `[BLOCK]` / `[HITL]` tags.
-- **Remaining:** Machine-readable JSON causal dependency graph artifact per run. Jaeger OTLP tracing integration (defined in `docker-compose.local.yml`, not yet wired).
+- `agentguard/trace.py`: `new_event()` factory emits a `TraceEvent` at every node boundary and `check_step()` call; `dump()` serializes into schema `1.0` JSON with causal `edges` adjacency list.
+- `./traces/{run_id}.json` written at run exit; also persisted to Redis for multi-instance access.
+- **Remaining (deferred):** Jaeger OTLP tracing integration.
 
-### ⏳ Phase 5: Validation & Benchmarking (Partial)
-- PoC validated against 5 governance scenarios covering all wedge use cases.
-- **Remaining:** Adversarial prompt injection testing, load testing under concurrent recursive runs, latency regression suite.
+### ✅ Phase 5: REST API & Identity (Complete — Steps A/B/C)
+- `backend/` FastAPI package: 7 HTTP endpoints (POST/GET `/runs`, GET `/runs/{id}/trace`, POST `/runs/{id}/approve`, GET/POST `/policy`, GET `/health`).
+- JWT-based `AuthContext` propagated through all subgraph levels; auth subject embedded in every `GovernanceDecision.reason`.
+- LangGraph `interrupt()` wired for `require_hitl` rules; `/runs/{id}/approve` resumes graph via checkpointer.
+- 65 unit + API tests, all passing.
+- **Remaining (Phase 5 follow-on):** Adversarial prompt injection testing, load testing (10 concurrent runs, p95 latency), RS256/JWKS JWT, durable Redis checkpointer as default.
 
 ---
 
@@ -78,18 +83,19 @@ Implements the **Fractal Chain-of-Thought (FCoT)** and **Supervisor** patterns.
 
 ## Next Milestones
 
-### Milestone 4: Causal Graph & Audit Trail (Phase 4)
-- Export per-run JSON trace with full decision chain
-- Wire Jaeger OTLP for real-time distributed tracing
+### ✅ Milestone 4: Causal Graph & Audit Trail (Phase 4) — COMPLETE
+- Per-run JSON trace with full decision chain (`agentguard/trace.py`)
+- Accessible via REST API `GET /runs/{id}/trace`
 
-### Milestone 5: REST API & Multi-tenancy
-- FastAPI backend from `docker-compose.local.yml`
-- Per-tenant policy scoping and JWT identity propagation (resolves U-05)
-- Python SDK as thin wrapper over REST API
+### ✅ Milestone 5: REST API & Identity (Phase 5 Steps A/B/C) — COMPLETE
+- FastAPI backend (`backend/`) with 7 endpoints + OpenAPI docs
+- JWT identity propagation through all subgraph levels (resolves U-05)
+- HITL pause/resume via LangGraph `interrupt()` (resolves U-04)
 
 ### Milestone 6: Parallel Execution
-- Replace serial `for` loop in `RecursiveExecutor` with LangGraph `Send`
-- Redis-backed Registry with vector similarity search
+- Replace serial `for` loop in `RecursiveExecutor` with LangGraph `Send` (requires U-01 Redlock first)
+- Redis-backed Registry with vector similarity search (resolves U-09)
+- RS256/JWKS JWT verification for production (deferred from Milestone 5)
 
 ---
 

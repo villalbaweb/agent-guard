@@ -128,28 +128,54 @@ class AgentGuardState(TypedDict):
     results: Dict[str, str]
     all_agents: List[Dict]
     all_edges: List[Dict]
-    global_signal: str  # e.g., "OK", "INTERRUPT", "RETRY"
+    global_signal: str          # "OK" | "INTERRUPT" | "RETRY" | "REJECT" | "HITL_PENDING"
     usage_stats: Dict[str, float]
     budget_config: Dict[str, float]
     governance_decisions: List[GovernanceDecision]
+    trace_events: List[Dict[str, Any]]   # append-only causal event log (Step A)
+    auth_context: Dict[str, Any]         # JWT-derived caller identity (Step C)
+    parent_trace_event_id: Optional[str] # causal link from parent graph (Step A+C)
 ```
 
+`GovernanceDecision` fields: `action`, `allowed`, `reason`, `cost`, `hitl_required`.  
+`hitl_required=True` distinguishes a human-approval pause from a hard block.
+
 ### 6.2 Shared Epistemic Memory (Redis)
-- **Key: `run:{id}:history`** -> Serialized thought history with embeddings for loop detection.
-- **Key: `run:{id}:blueprints`** -> Cached execution plans for reuse.
-- **Key: `run:{id}:telemetry`** -> Real-time "thoughts" for external observability.
+- **Key: `run:{id}:history`** — Serialized thought history with embeddings for loop detection.
+- **Key: `run:{id}:blueprints`** — Cached execution plans for reuse.
+- **Key: `run:{id}:telemetry`** — Real-time "thoughts" for external observability.
+- **Key: `run:{id}:state`** — Full `AgentGuardState` snapshot at run completion (REST API — Step B).
+- **Key: `run:{id}:trace`** — Serialized trace JSON document (Step A artifact, served by `/runs/{id}/trace`).
 
 ## 7. Observability, Logging, and Metrics
 - **Causal Dependency Graph:** Every run produces a machine-readable JSON trace of the reasoning chain.
 - **Semantic Loop Detection:** Monitors the similarity of agent thoughts to prevent infinite recursion/stalls.
 - **Cost Attribution:** Real-time USD cost tracking mapped to each agent and task ID.
 
+## 7.5 REST API (FastAPI — `backend/`)
+
+| Method | Path | Auth | Description |
+|:-------|:-----|:-----|:------------|
+| `GET` | `/health` | None | Redis + LLM liveness probe |
+| `POST` | `/runs` | Bearer / API key | Submit task; returns `run_id` immediately (background) |
+| `GET` | `/runs/{id}` | Bearer / API key | Status, `final_answer`, cost, governance summary |
+| `GET` | `/runs/{id}/trace` | Bearer / API key | Download full trace JSON (Step A artifact) |
+| `POST` | `/runs/{id}/approve` | Bearer + `approver` role | Approve/reject HITL_PENDING step; resumes graph |
+| `GET` | `/policy` | Bearer / API key | Return active `policy.yaml` rules |
+| `POST` | `/policy/reload` | Bearer / API key | Hot-reload policy without restart |
+
+Run state machine: `queued → running → {completed | blocked | hitl_pending | error}`.  
+`hitl_pending` transitions to `completed` or `blocked` via `POST /approve`.
+
 ## 8. Security and Safety Considerations
 - **PII Redaction:** Automated scanning and redaction of sensitive data in inputs/outputs (Inline Policy).
 - **Forbidden Topics:** Keyword and semantic filters to prevent unauthorized research/action.
-- **Identity Propagation:**
-    - **Governance Identity Token:** Every request is tagged with a JWT representing the "Root User."
-    - **Deterministic Identity:** This token is immutably passed through the `AgentGuardState` to all worker subgraphs, ensuring that dynamic parallel agents inherit the original user's permissions for internal tool/database access.
+- **Identity Propagation (implemented — Step C):**
+    - `agentguard/auth.py` implements `AuthContext` (dataclass) and `create_token`/`decode_token` (HS256; RS256/JWKS planned).
+    - JWT claims mapped to `AuthContext` fields: `sub→subject`, `tenant→tenant_id`, `roles`, `iat`, `exp`, `jti`.
+    - `auth_context` is verbatim-copied into every child `AgentGuardState`, so governance decisions at any recursion depth carry `[subject:X]` in their `reason`.
+    - Expired JWTs block execution at preflight and per-step; `require_approver()` enforces role-based access for HITL resume.
+- **HITL (implemented — Step C):** `require_hitl` policy action triggers LangGraph `interrupt()`, pausing the graph and persisting state to Redis via checkpointer. Resume requires approver-role JWT via `POST /runs/{id}/approve`.
 
 ## 9. Scalability and Reliability
 - **Recursive Limits:** Hard limits on recursion depth ($N=10$) to prevent runaway processes.

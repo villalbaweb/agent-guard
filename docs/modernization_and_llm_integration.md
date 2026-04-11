@@ -45,6 +45,10 @@ PYTHONPATH=. uv run pytest                      # run the test suite
 | `ANTHROPIC_MODEL` | Claude model ID | `claude-haiku-4-5-20251001` |
 | `REDIS_URL` | Redis connection string | `redis://localhost:6379` |
 | `POLICY_FILE` | Path to YAML governance rules | `policy.yaml` |
+| `AGENTGUARD_JWT_SECRET` | HS256 signing secret for JWT auth | — (required when auth enabled) |
+| `AGENTGUARD_JWT_ISSUER` | Expected `iss` claim in JWTs | `agentguard` |
+| `AGENTGUARD_API_KEY` | Static API key fallback for non-JWT clients | — |
+| `AGENTGUARD_NO_AUTH` | Set to `1` to bypass all auth (dev/testing only) | — |
 
 ---
 
@@ -80,17 +84,18 @@ A local Docker service using Hugging Face sentence-transformers was evaluated an
 
 ## 5. Infrastructure (`docker-compose.poc.yml`)
 
-The PoC requires **Redis only**:
+The PoC stack runs with a single compose command:
 
 ```bash
 docker compose -f docker-compose.poc.yml up -d
 ```
 
-| Service | Image | Purpose |
-| :--- | :--- | :--- |
-| `redis` | `redis:7-alpine` | Thought history, blueprint cache, loop-detection state |
+| Service | Image | Port | Purpose |
+| :--- | :--- | :--- | :--- |
+| `redis` | `redis:7-alpine` | 6379 | Thought history, blueprint cache, loop-detection state, run state + trace storage |
+| `backend` | `Dockerfile.backend` | 8000 | FastAPI REST API (`agentguard` governance layer + HTTP facade) |
 
-The full application stack (React frontend, FastAPI backend, PostgreSQL + pgvector, Jaeger tracing) is defined in `docker-compose.local.yml` for future phases.
+The full application stack (React frontend, PostgreSQL + pgvector, Jaeger tracing) is defined in `docker-compose.local.yml` for future phases.
 
 ---
 
@@ -149,9 +154,12 @@ State-level `budget_config` overrides `policy.yaml` values — enables per-run b
 
 ## 8. Remaining Gaps (Next Phases)
 
-- **Concurrency:** Replace serial `for` loop in `RecursiveExecutor` with LangGraph `Send` for true parallel subtask dispatch
-- **Registry persistence:** Migrate `Registry` from in-memory dict to Redis
-- **Identity propagation:** Implement JWT-based `auth_context` in `AgentGuardState` (resolves U-05)
-- **HITL wiring:** Validate LangGraph `interrupt` propagation in nested subgraphs (resolves U-04)
-- **REST API:** FastAPI backend layer for multi-tenant, language-agnostic enterprise access
-- **Causal graph export:** Produce structured JSON trace artifact per run for audit/SOX compliance
+- **Concurrency:** Replace serial `for` loop in `RecursiveExecutor` with LangGraph `Send` for true parallel subtask dispatch (requires U-01 Redlock first)
+- **Registry persistence:** Migrate `Registry` from in-memory dict to Redis + vector similarity search (U-09)
+- **Production JWT:** Upgrade from HS256 to RS256 with a JWKS endpoint for key rotation
+- **Durable HITL checkpointer:** `langgraph-checkpoint-redis` wired but not the default install; needs `hitl-redis` optional dependency group activated in production
+- **Load testing:** 10 concurrent runs, p95 latency measurement (Phase 5 follow-on)
+- ~~**Identity propagation:** Implement JWT-based `auth_context` in `AgentGuardState`~~ — **DONE (Step C)**
+- ~~**HITL wiring:** Validate LangGraph `interrupt` propagation in nested subgraphs~~ — **DONE (Step C)**
+- ~~**REST API:** FastAPI backend layer for multi-tenant, language-agnostic enterprise access~~ — **DONE (Step B)**
+- ~~**Causal graph export:** Produce structured JSON trace artifact per run for audit/SOX compliance~~ — **DONE (Step A)**
