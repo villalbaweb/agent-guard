@@ -1,0 +1,169 @@
+# =============================================================================
+# AgentGuard Policy — Meridian Capital Asset Management
+# =============================================================================
+# Loaded by PolicyEngine when POLICY_FILE=examples/policy_meridian.yaml
+#
+# Governance requirements:
+#   - No agent may execute a trade above $250k without a licensed human approver
+#   - Client PII (account numbers, SSNs, emails) must never enter LLM prompts
+#   - OFAC/sanctions-listed entities are a hard block
+#   - Every AI-assisted decision must produce an auditable trace (EU AI Act)
+#   - Junior analysts capped at $0.08/run; senior PM tier capped at $5.00/run
+# =============================================================================
+
+version: "1.0"
+
+# ---------------------------------------------------------------------------
+# Budget Controls
+# ---------------------------------------------------------------------------
+# State-level budget_config overrides these defaults, enabling per-user tiers.
+# Senior PM: max_cost_usd=5.00 (set in RunCreateRequest.budget_override)
+# Junior analyst: max_cost_usd=0.08 (set in RunCreateRequest.budget_override)
+# System/automation: max_cost_usd=0.50
+budget:
+  max_cost_usd: 5.00          # Default: senior tier
+  warn_at_pct: 75             # Warn at 75% consumed
+  per_step_limit_usd: 1.50   # Single agent call ceiling
+
+# ---------------------------------------------------------------------------
+# Content Rules
+# Evaluated in order — first match wins.
+# ---------------------------------------------------------------------------
+content_rules:
+
+  # --- PII: Client account numbers ---
+  - id: block_pii_account_number
+    description: "Block any action that exposes internal account reference numbers"
+    field: intent
+    operator: regex
+    pattern: 'ACC-\d{4}-\d{4}-[A-Z]{2}'
+    action: block
+    reason: "PII detected: client account number found in intent."
+
+  # --- PII: Social Security Numbers ---
+  - id: block_pii_ssn
+    description: "Block actions exposing SSNs"
+    field: intent
+    operator: regex
+    pattern: '\b\d{3}-\d{2}-\d{4}\b'
+    action: block
+    reason: "PII detected: SSN pattern found."
+
+  # --- PII: Email addresses ---
+  - id: block_pii_email
+    description: "Prevent client email addresses from entering LLM prompts"
+    field: intent
+    operator: regex
+    pattern: '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+    action: block
+    reason: "PII detected: email address found."
+
+  # --- Sanctions: OFAC-listed entities ---
+  # In production this list would be maintained by the compliance team and
+  # hot-reloaded via POST /policy/reload after OFAC list updates.
+  - id: block_sanctioned_entities
+    description: "Block research or trading in OFAC-sanctioned entities"
+    field: intent
+    operator: contains
+    values:
+      - novatek
+      - nvtk
+      - sberbank
+      - vtb bank
+      - gazprom
+      - rosneft
+      - sanctioned
+      - ofac restricted
+    action: block
+    reason: "Compliance block: entity appears on sanctions screening list (OFAC)."
+
+  # --- HITL: Trade execution above threshold ---
+  # Any action that routes to the trade execution agent for a real order
+  # requires sign-off from a licensed compliance officer (role=approver).
+  - id: hitl_trade_execution
+    description: "Require human approval for any trade execution action"
+    field: action
+    operator: contains
+    values:
+      - execute_trade
+      - submit_order
+      - route_to_venue
+      - wire_transfer
+      - transfer_funds
+    action: require_hitl
+    reason: "Trade execution requires compliance pre-clearance (regulatory requirement)."
+
+  # --- HITL: Portfolio rebalancing above $100k ---
+  - id: hitl_large_rebalance
+    description: "Require approval for portfolio rebalancing operations"
+    field: intent
+    operator: contains
+    values:
+      - rebalancing proposal
+      - rebalance portfolio
+      - liquidate position
+      - close position
+    action: require_hitl
+    reason: "Portfolio restructuring requires portfolio manager sign-off."
+
+  # --- Block: Offensive security / system access ---
+  - id: block_system_access
+    description: "Block any attempt to access internal systems outside the agent's scope"
+    field: intent
+    operator: contains
+    values:
+      - hack
+      - exploit
+      - sql injection
+      - credential dump
+      - bypass
+      - unauthorized access
+    action: block
+    reason: "Forbidden: system access outside agent authorization scope."
+
+  # --- Allow: Standard research operations (explicit fast-path) ---
+  # These are allow rules — they stop evaluation early so the LLM semantic
+  # guard doesn't add latency for clearly safe internal operations.
+  - id: allow_market_data_fetch
+    description: "Fast-path allow for routine market data retrieval"
+    field: action
+    operator: contains
+    values:
+      - invoke_market_data_agent
+    action: allow
+    reason: "Standard market data retrieval — pre-approved."
+
+  - id: allow_fundamental_analysis
+    description: "Fast-path allow for SEC filing analysis"
+    field: action
+    operator: contains
+    values:
+      - invoke_fundamental_analyst
+    action: allow
+    reason: "Fundamental analysis of public filings — pre-approved."
+
+# ---------------------------------------------------------------------------
+# Audit Trail
+# ---------------------------------------------------------------------------
+# EU AI Act (Article 13) and SEC Rule 17a-4 both require immutable audit logs
+# for AI-assisted investment decisions.  AgentGuard's trace output satisfies
+# both requirements: it is append-only, includes full causal chain, and
+# records the human approver identity for HITL steps.
+audit:
+  enabled: true
+  trace_all_decisions: true
+  retention_days: 2555        # 7-year retention (SEC Rule 17a-4)
+  emit_causal_graph: true
+
+# ---------------------------------------------------------------------------
+# Loop Detection
+# ---------------------------------------------------------------------------
+# Market data agents can get stuck retrying the same endpoint if a ticker
+# lookup fails.  Semantic loop detection catches near-identical re-queries
+# (not just exact duplicates) before they burn API quota.
+loop_detection:
+  enabled: true
+  strategy: semantic
+  similarity_threshold: 0.90   # Slightly lower than default — financial
+                                # queries often differ only in ticker symbol
+  lookback_window: 4
