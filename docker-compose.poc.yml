@@ -1,0 +1,18 @@
+services:
+
+  # --- Redis — shared state, blueprint cache, loop-detection history ---
+  redis:
+    image: redis:7-alpine
+    container_name: agentguard_redis_poc
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+networks:
+  default:
+    name: agentguard_poc_network

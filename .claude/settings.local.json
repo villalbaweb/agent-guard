@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc:*)",
+      "Bash(ls D:/Git/agent-guard/.env*)",
+      "Bash(uv run python -c ':*)",
+      "Bash(docker compose:*)",
+      "Bash(docker build:*)",
+      "Bash(taskkill /F /IM \"docker.exe\")",
+      "Bash(docker exec:*)",
+      "Bash(uv run:*)",
+      "Bash(PYTHONPATH=. uv run python agentguard/poc.py)",
+      "Bash(uv pip:*)"
+    ]
+  }
+}

@@ -1,0 +1,71 @@
+# =============================================================================
+# AgentGuard Policy Rules
+# =============================================================================
+# Rules are evaluated in order. First matching rule wins.
+# Operators: contains, regex, semantic_similarity (requires embeddings service)
+# Actions:   block | allow | require_hitl (human-in-the-loop approval)
+# =============================================================================
+
+version: "1.0"
+
+# --- Budget Controls (Wedge 1: Cost Spiral Prevention) ---
+budget:
+  max_cost_usd: 10.00          # Hard limit per run
+  warn_at_pct: 80              # Emit warning at 80% consumed
+  per_step_limit_usd: 1.00    # Single tool call ceiling
+
+# --- Content Policies (Wedge 2: PII & Forbidden Topics) ---
+content_rules:
+  - id: block_pii_ssn
+    description: "Block actions exposing Social Security Numbers"
+    field: intent          # evaluated against the intent string
+    operator: regex
+    pattern: '\b\d{3}-\d{2}-\d{4}\b'
+    action: block
+    reason: "PII detected: SSN pattern found."
+
+  - id: block_pii_email
+    description: "Block actions exposing raw email addresses"
+    field: intent
+    operator: regex
+    pattern: '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+    action: block
+    reason: "PII detected: email address found."
+
+  - id: block_offensive_security
+    description: "Block hacking, exploitation, and attack generation requests"
+    field: intent
+    operator: contains
+    values:
+      - hack
+      - exploit
+      - sql injection
+      - reverse shell
+      - credential dump
+    action: block
+    reason: "Forbidden topic: offensive security action."
+
+  - id: hitl_financial_transactions
+    description: "Require human approval for any financial action"
+    field: action
+    operator: contains
+    values:
+      - transfer_funds
+      - execute_payment
+      - wire_transfer
+    action: require_hitl
+    reason: "Financial action requires human approval."
+
+# --- Audit Trail (Wedge 3: EU AI Act / SOX Compliance) ---
+audit:
+  enabled: true
+  trace_all_decisions: true    # Record every allow/block with reasoning
+  retention_days: 730          # 2-year retention for SOX compliance
+  emit_causal_graph: true      # Produce machine-readable JSON trace per run
+
+# --- Loop Detection ---
+loop_detection:
+  enabled: true
+  strategy: semantic           # "exact" (no embeddings) | "semantic" (requires embeddings service)
+  similarity_threshold: 0.92   # Cosine similarity above this = loop detected
+  lookback_window: 5           # Compare against last N thoughts

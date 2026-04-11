@@ -1,85 +1,270 @@
-from typing import Dict, Any, Tuple
+"""
+PolicyEngine
+------------
+Evaluates governance rules from policy.yaml against every preflight check
+and per-step action before execution.
+
+Rule evaluation order (content_rules list):
+  1. regex    — compiled regular expression match against the target field
+  2. contains — substring match (case-insensitive) against any value in `values`
+
+Rule actions:
+  allow        — explicit allow (stops further evaluation)
+  block        — deny the action
+  require_hitl — pause for human-in-the-loop approval (sets hitl_required=True)
+
+Budget evaluation happens before content rules in check_step().
+Loop detection is delegated to MemoryManager.
+"""
+import os
+import re
 import logging
+from typing import Dict, Any, Tuple, List
+
+try:
+    import yaml
+    _YAML_AVAILABLE = True
+except ImportError:
+    _YAML_AVAILABLE = False
+
 from .state import AgentGuardState, GovernanceDecision
 from .llm import get_llm, normalize_llm_output
+from .memory import MemoryManager
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_POLICY = {
+    "budget": {"max_cost_usd": 10.0, "warn_at_pct": 80, "per_step_limit_usd": 1.0},
+    "content_rules": [],
+    "audit": {"enabled": True, "trace_all_decisions": True},
+    "loop_detection": {
+        "enabled": True,
+        "strategy": "semantic",
+        "similarity_threshold": 0.92,
+        "lookback_window": 5,
+    },
+}
+
+
 class PolicyEngine:
-    def __init__(self, memory_manager):
+    def __init__(self, memory_manager: MemoryManager):
         self.memory = memory_manager
         self.llm = get_llm()
+        self._policy = self._load_policy()
+        self._compiled_rules = self._compile_rules(
+            self._policy.get("content_rules", [])
+        )
+
         if self.llm:
-            logger.info(f"PolicyEngine initialized with LLM: {self.llm.__class__.__name__}")
+            logger.info(f"PolicyEngine: LLM guard active ({self.llm.__class__.__name__})")
         else:
-            logger.info("PolicyEngine running in MOCK mode (no LLM configured).")
+            logger.info("PolicyEngine: no LLM configured — rule-based checks only.")
+
+        logger.info(
+            f"PolicyEngine: loaded {len(self._compiled_rules)} content rules, "
+            f"budget cap ${self._policy['budget']['max_cost_usd']:.2f}"
+        )
+
+    # ------------------------------------------------------------------ #
+    #  Policy loading                                                      #
+    # ------------------------------------------------------------------ #
+
+    def _load_policy(self) -> Dict[str, Any]:
+        policy_file = os.environ.get("POLICY_FILE", "policy.yaml")
+        if not _YAML_AVAILABLE:
+            logger.warning("pyyaml not installed — using default policy.")
+            return _DEFAULT_POLICY
+
+        try:
+            with open(policy_file, encoding="utf-8") as f:
+                loaded = yaml.safe_load(f)
+            # Deep-merge with defaults so missing sections don't KeyError
+            merged = dict(_DEFAULT_POLICY)
+            merged.update(loaded or {})
+            logger.info(f"PolicyEngine: policy loaded from {policy_file}")
+            return merged
+        except FileNotFoundError:
+            logger.warning(
+                f"PolicyEngine: {policy_file} not found — using built-in defaults."
+            )
+            return _DEFAULT_POLICY
+
+    def _compile_rules(self, rules: List[Dict]) -> List[Dict]:
+        """Pre-compile regex patterns for fast per-step evaluation."""
+        compiled = []
+        for rule in rules:
+            entry = dict(rule)
+            if rule.get("operator") == "regex":
+                try:
+                    entry["_compiled"] = re.compile(
+                        rule["pattern"], re.IGNORECASE | re.DOTALL
+                    )
+                except re.error as e:
+                    logger.error(
+                        f"PolicyEngine: invalid regex in rule '{rule.get('id')}': {e}"
+                    )
+                    continue
+            compiled.append(entry)
+        return compiled
+
+    # ------------------------------------------------------------------ #
+    #  Rule evaluation                                                     #
+    # ------------------------------------------------------------------ #
+
+    def _evaluate_rules(
+        self, action: str, intent: str
+    ) -> Tuple[bool, bool, str]:
+        """
+        Returns (allowed, hitl_required, reason).
+        Evaluates compiled content rules in order; first match wins.
+        """
+        fields = {"action": action, "intent": intent}
+
+        for rule in self._compiled_rules:
+            field_value = fields.get(rule.get("field", "intent"), intent)
+            operator = rule.get("operator")
+            matched = False
+
+            if operator == "regex":
+                matched = bool(rule["_compiled"].search(field_value))
+            elif operator == "contains":
+                field_lower = field_value.lower()
+                matched = any(v.lower() in field_lower for v in rule.get("values", []))
+
+            if matched:
+                rule_action = rule.get("action", "block")
+                reason = rule.get("reason", f"Rule '{rule.get('id')}' matched.")
+
+                if rule_action == "allow":
+                    return True, False, reason
+                elif rule_action == "require_hitl":
+                    logger.info(f"PolicyEngine: HITL required — {reason}")
+                    return False, True, reason
+                else:  # block
+                    logger.info(f"PolicyEngine: BLOCK — {reason}")
+                    return False, False, reason
+
+        return True, False, "No content rules matched."
+
+    def _make_decision(
+        self,
+        action: str,
+        allowed: bool,
+        reason: str,
+        cost: float = 0.0,
+        hitl_required: bool = False,
+    ) -> GovernanceDecision:
+        return GovernanceDecision(
+            action=action,
+            allowed=allowed,
+            reason=reason,
+            cost=cost,
+            hitl_required=hitl_required,
+        )
+
+    # ------------------------------------------------------------------ #
+    #  Public API                                                          #
+    # ------------------------------------------------------------------ #
 
     def check_preflight(self, state: AgentGuardState) -> Tuple[bool, GovernanceDecision]:
-        """Check if the whole task is allowed before starting."""
-        task = state.get("task", "").lower()
-        if "forbidden" in task or "hack" in task:
-            decision = GovernanceDecision(
-                action="start_task",
-                allowed=False,
-                reason="Task contains forbidden keywords.",
-                cost=0.0
+        """Validates the top-level task before execution begins."""
+        task = state.get("task", "")
+        intent = task  # treat full task text as the intent for preflight
+
+        allowed, hitl, reason = self._evaluate_rules(action="start_task", intent=intent)
+        if not allowed:
+            return False, self._make_decision(
+                "start_task", False, reason, hitl_required=hitl
             )
-            return False, decision
 
-        return True, GovernanceDecision(action="start_task", allowed=True, reason="Passes preflight.", cost=0.01)
+        return True, self._make_decision(
+            "start_task", True, "Preflight passed.", cost=0.0
+        )
 
-    def check_step(self, state: AgentGuardState, action: str, intent: str, cost_estimate: float) -> Tuple[bool, GovernanceDecision]:
-        """Check if an individual step (tool call or recursion) is allowed."""
+    def check_step(
+        self,
+        state: AgentGuardState,
+        action: str,
+        intent: str,
+        cost_estimate: float,
+    ) -> Tuple[bool, GovernanceDecision]:
+        """Validates an individual step (tool call, agent hand-off, recursion)."""
+        budget_cfg = self._policy["budget"]
+        state_budget = state.get("budget_config", {})
+        # State-level budget_config overrides policy.yaml (allows per-run limits)
+        max_cost = state_budget.get("max_cost_usd") or budget_cfg.get("max_cost_usd", 10.0)
+        per_step_limit = state_budget.get("per_step_limit_usd") or budget_cfg.get("per_step_limit_usd", 1.0)
 
-        # 0. Inline Semantic Policy Check (LLM-based)
+        # 1. Per-step cost ceiling (catches runaway single calls)
+        if cost_estimate > per_step_limit:
+            return False, self._make_decision(
+                action,
+                False,
+                f"Step cost ${cost_estimate:.4f} exceeds per-step limit ${per_step_limit:.2f}.",
+            )
+
+        # 2. Cumulative budget check
+        current_cost = state.get("usage_stats", {}).get("total_cost", 0.0)
+        if current_cost + cost_estimate > max_cost:
+            return False, self._make_decision(
+                action,
+                False,
+                f"Budget exhausted: ${current_cost + cost_estimate:.4f} > ${max_cost:.2f}.",
+            )
+
+        # 3. Content rules (regex + keyword)
+        allowed, hitl, reason = self._evaluate_rules(action=action, intent=intent)
+        if not allowed:
+            return False, self._make_decision(
+                action, False, reason, hitl_required=hitl
+            )
+
+        # 4. LLM semantic safety (optional — only runs if LLM is configured)
         if self.llm:
-            prompt = f"Analyze if this action and intent violates basic safety rules (e.g. no hacking, no PII exposure, no harm). Respond with only 'ALLOW' or 'BLOCK'.\nAction: {action}\nIntent: {intent}"
+            prompt = (
+                "You are a safety classifier for an enterprise AI governance system. "
+                "Evaluate whether this specific agent action represents a GENUINE safety violation.\n\n"
+                "ALLOW if the action is: internal task execution, web search, data analysis, "
+                "summarization, research, code generation for legitimate purposes, or any standard "
+                "business operation — even if the topic sounds complex or sensitive.\n\n"
+                "BLOCK only if the action clearly involves: actual system exploitation, "
+                "exfiltrating real PII/credentials, generating malware, financial fraud, "
+                "or causing direct harm. Task names and research topics alone do NOT constitute violations.\n\n"
+                "Respond with exactly one word: ALLOW or BLOCK.\n\n"
+                f"Action: {action}\nIntent: {intent}"
+            )
             try:
                 result = self.llm.invoke(prompt)
-                content = normalize_llm_output(result.content).strip().upper()
-                if "BLOCK" in content:
-                    return False, GovernanceDecision(
-                         action=action,
-                         allowed=False,
-                         reason=f"LLM Policy Blocked: Semantic safety violation detected.",
-                         cost=0.0
-                     )
+                verdict = normalize_llm_output(result.content).strip().upper()
+                if "BLOCK" in verdict:
+                    return False, self._make_decision(
+                        action,
+                        False,
+                        "LLM semantic guard: safety violation detected.",
+                    )
             except Exception as e:
-                logger.error(f"LLM Policy check failed: {e}. Defaulting to BLOCK for safety.")
-                return False, GovernanceDecision(action=action, allowed=False, reason="Safety check service unavailable.", cost=0.0)
+                logger.error(
+                    f"LLM policy check failed: {e}. Failing closed for safety."
+                )
+                return False, self._make_decision(
+                    action, False, "Safety check service unavailable — failing closed."
+                )
 
-        # 1. Budget check
-        current_cost = state.get("usage_stats", {}).get("total_cost", 0.0)
-        budget = state.get("budget_config", {}).get("max_cost", 10.0)
+        # 5. Loop detection (delegates to MemoryManager)
+        loop_cfg = self._policy.get("loop_detection", {})
+        if loop_cfg.get("enabled", True):
+            thought = {"action": action, "intent": intent}
+            if self.memory.detect_loop(
+                state.get("root_task_id", "default"),
+                thought,
+                similarity_threshold=loop_cfg.get("similarity_threshold", 0.92),
+                lookback_window=loop_cfg.get("lookback_window", 5),
+            ):
+                return False, self._make_decision(
+                    action, False, "Loop detected: agent is repeating a prior step."
+                )
+            self.memory.record_thought(state.get("root_task_id", "default"), thought)
 
-        if current_cost + cost_estimate > budget:
-            return False, GovernanceDecision(
-                action=action,
-                allowed=False,
-                reason=f"Budget exceeded. Cost: {current_cost + cost_estimate} > {budget}",
-                cost=0.0
-            )
-
-        # 2. PII / Keyword check
-        if "PII" in action or "ssn" in action.lower():
-             return False, GovernanceDecision(
-                 action=action,
-                 allowed=False,
-                 reason="PII detected in action.",
-                 cost=0.0
-             )
-
-        # 3. Loop detection
-        thought = {"action": action, "intent": intent}
-        if self.memory.detect_loop(state.get("root_task_id", "default"), thought):
-            return False, GovernanceDecision(
-                action=action,
-                allowed=False,
-                reason="Semantic loop detected.",
-                cost=0.0
-            )
-
-        # Record thought for future loop detection
-        self.memory.record_thought(state.get("root_task_id", "default"), thought)
-
-        return True, GovernanceDecision(action=action, allowed=True, reason="Step allowed.", cost=cost_estimate)
+        return True, self._make_decision(
+            action, True, "Step allowed.", cost=cost_estimate
+        )

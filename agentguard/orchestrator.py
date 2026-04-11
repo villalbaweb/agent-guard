@@ -1,73 +1,96 @@
-from typing import Dict, Any, List
+import json
+import re
 import logging
+from typing import Dict, Any, List
 from .state import AgentGuardState
 from .llm import get_llm, normalize_llm_output
 
 logger = logging.getLogger(__name__)
+
 
 class ExecutionPlanner:
     def __init__(self, registry):
         self.registry = registry
         self.llm = get_llm()
         if self.llm:
-            logger.info(f"ExecutionPlanner initialized with LLM router: {self.llm.__class__.__name__}")
+            logger.info(f"ExecutionPlanner: LLM router active ({self.llm.__class__.__name__})")
         else:
-            logger.info("ExecutionPlanner running in MOCK routing mode (no LLM configured).")
+            logger.info("ExecutionPlanner: no LLM — using mock routing.")
 
     def decompose(self, state: AgentGuardState) -> AgentGuardState:
-        """Decompose a high-level task into sub-intents."""
+        """Break the top-level task into focused, clean subtask descriptions."""
         task = state.get("task", "")
-        # Mock decomposition
-        subtasks = [f"{task} - part 1", f"{task} - part 2"]
-        if state.get("depth", 0) > 1:
-            subtasks = [f"{task} - final detail"]
+        subtasks = []
+
+        if self.llm:
+            prompt = (
+                "You are a task planner for an AI agent system. "
+                "Break the following task into 2-3 focused, concrete subtasks. "
+                "Each subtask should be a short, action-oriented description (under 15 words). "
+                "Reply with ONLY a valid JSON array of strings — no explanation, no markdown.\n\n"
+                f"Task: {task}\n\n"
+                'Example: ["Search for recent GDP data", "Analyze trends across regions", "Summarize key findings"]'
+            )
+            try:
+                result = self.llm.invoke(prompt)
+                content = normalize_llm_output(result.content).strip()
+                # Strip markdown fences if present
+                content = re.sub(r"```(?:json)?|```", "", content).strip()
+                match = re.search(r"\[.*\]", content, re.DOTALL)
+                if match:
+                    parsed = json.loads(match.group())
+                    if isinstance(parsed, list) and parsed:
+                        subtasks = [str(s).strip() for s in parsed if s]
+                        logger.info(f"ExecutionPlanner: decomposed into {len(subtasks)} subtasks")
+            except Exception as e:
+                logger.error(f"ExecutionPlanner: LLM decomposition failed ({e}) — using fallback.")
+
+        if not subtasks:
+            subtasks = [f"Research the topic: {task}", f"Analyze and summarize: {task}"]
 
         state["results"] = state.get("results", {})
         state["results"]["subtasks"] = subtasks
         return state
 
     def route_intent(self, intent: str) -> List[Dict[str, Any]]:
-        """Look up agents/tools in the registry that can handle this intent."""
-        # Simple semantic search using the registry
-        matched_agents = self.registry.search_by_intent(intent)
-        return matched_agents
+        """Look up registered agents that can handle this intent."""
+        return self.registry.search_by_intent(intent)
 
     def plan(self, state: AgentGuardState) -> AgentGuardState:
-        """Map subtasks to agents based on intent."""
+        """Map each subtask to the best available agent via intent extraction."""
         subtasks = state.get("results", {}).get("subtasks", [])
-
-        # Get registered agents for routing options
-        available_tools = "\n".join([f"- {a['role']}: {a['semantic_description']}" for a in self.registry.list_all()])
+        available_tools = "\n".join(
+            f"- {a['role']}: {a['semantic_description']}"
+            for a in self.registry.list_all()
+        )
 
         edges = []
-        for task in subtasks:
-            intent = "analyze" # Default intent
+        for subtask in subtasks:
+            intent = "analyze"  # safe default
 
-            # Advanced Semantic Intent Extraction (Phase 2 Routing)
             if self.llm:
-                prompt = f"Given the task: '{task}', determine the primary intent verb out of the available tools:\n{available_tools}\nRespond with only a single word (e.g., 'search', 'analyze', 'code')."
+                prompt = (
+                    f"You are a router. Given this subtask, pick the best matching role "
+                    f"from the list below and respond with ONLY the primary action verb "
+                    f"(one lowercase word like 'search' or 'analyze').\n\n"
+                    f"Subtask: {subtask}\n\n"
+                    f"Available roles:\n{available_tools}"
+                )
                 try:
                     result = self.llm.invoke(prompt)
-                    content = normalize_llm_output(result.content)
-                    intent = content.strip().lower()
+                    raw = normalize_llm_output(result.content).strip().lower()
+                    # Take only the first word to avoid multi-word responses
+                    intent = raw.split()[0] if raw else "analyze"
                 except Exception as e:
-                    logger.error(f"LLM Intent Extraction failed: {e}. Falling back to default intent.")
+                    logger.error(f"ExecutionPlanner: intent extraction failed ({e}).")
             else:
-                # Mock Intent Extraction
-                intent = "search" if "search" in task.lower() else "analyze"
+                intent = "search" if "search" in subtask.lower() else "analyze"
 
             agents = self.route_intent(intent)
-
-            if agents:
-                edges.append({
-                    "task": task,
-                    "agent_id": agents[0]["id"]
-                })
-            else:
-                 edges.append({
-                    "task": task,
-                    "agent_id": "fallback_agent"
-                 })
+            edges.append({
+                "task": subtask,
+                "agent_id": agents[0]["id"] if agents else "fallback_agent",
+            })
 
         state["all_edges"] = state.get("all_edges", []) + edges
         return state

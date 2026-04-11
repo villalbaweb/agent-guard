@@ -7,72 +7,103 @@
 - **Non-Goal:** Multi-cloud/multi-region deployment beyond local/single-cluster.
 
 ## System Overview
-AgentGuard will use a **Supervisor-Worker-Guard** architecture.
-1.  **Orchestrator (SSA):** Decomposes tasks, creates blueprints, and manages recursive worker subgraphs.
-2.  **Control Plane / Guard (ACP):** Intercepts every step to evaluate policies, check for loops, and enforce budget limits.
+AgentGuard uses a **Supervisor-Worker-Guard** architecture:
+1. **Orchestrator (SSA):** Decomposes tasks via LLM, creates subtasks, and manages recursive worker subgraphs.
+2. **Control Plane / Guard (ACP):** Intercepts every step to evaluate YAML-defined policies, check for semantic loops, and enforce budget limits.
 
 ## Agentic Architecture
-We will implement the **Fractal Chain-of-Thought (FCoT)** and **Supervisor** patterns from the NotebookLM.
+Implements the **Fractal Chain-of-Thought (FCoT)** and **Supervisor** patterns.
 
-### Key Components and Services
-- **Global Orchestrator:** The primary entrance for user tasks; uses SSA's `TaskDecomposer` and `BlueprintManager`.
-- **Governance Node (Guard):** A shared LangGraph node that runs before and after any worker action. It uses ACP's `PolicyEngine` and `LoopSupervisor`.
-- **Recursive Executor:** A lightweight subgraph for parallel task execution (SSA's `RecursiveExecutor`).
-- **Telemetry & Traceability:** Uses ACP's "thoughts" recording and SSA's agent/edge logging to build a **Causal Dependency Graph**.
-- **Shared Epistemic Memory:** A Redis-based global state for history, embeddings (loop detection), and cached blueprints.
-
-## LangGraph Graph Design
-1.  **Entry Node:** `task_decomposer` (SSA)
-2.  **Governance Check:** `preflight_policy_check` (ACP) -> Blocks if forbidden or over budget.
-3.  **Planner Node:** `execution_planner` (SSA) -> Creates the multi-agent blueprint.
-4.  **Executor Node:** `graph_executor` (SSA) -> Orchestrates the specialized workers.
-    - Each **Worker** is actually a `recursive_subgraph` (SSA).
-    - Each **Step** within a worker is wrapped in a **Governance Check** (ACP).
-5.  **Synthesizer Node:** `synthesizer` (SSA) -> Compresses and summarizes the final output.
-6.  **Final Review:** `fidelity_audit` (NotebookLM pattern) -> Final check against original user instructions.
-
-## MVP Scope
-- **Phase 1: Project Skeleton, State & Registry**
-    - Merge `AgentState` (SSA) and `GovernanceDecision` (ACP) into a unified `AgentGuardState`.
-    - **Capability Registry:** Implement a central `Registry` module where agents and MCP tools register their metadata (name, description, schemas).
-    - Set up the Redis-based shared memory for loop detection and history.
-
-- **Phase 2: Governance & Intent Routing**
-    - **Intent-Based Router:** Update the `ExecutionPlanner` to use the **Agent Router** pattern (Intent Extraction -> Capability Graph Lookup).
-    - Integrate `PolicyEngine` (ACP) as a mandatory check for all tool calls and task transitions.
-    - Implement the `LoopSupervisor` (ACP) to detect semantic oscillations in recursive tasks.
-
-- **Phase 3: Recursive Execution Porting**
-    - Port the `RecursiveExecutor` (SSA) to the new state model.
-    - Implement the `MiniPlanner` for parallel task decomposition.
-
-- **Phase 4: Telemetry & Observability**
-    - Build the unified logging system to produce a machine-readable **Causal Dependency Graph**.
-    - Implement the "thoughts" telemetry for real-time monitoring.
-
-- **Phase 5: Validation & Benchmarking**
-    - Run the integrated system against complex, multi-step scenarios.
-    - Verify that policies (PII, forbidden topics, cost) are strictly enforced.
-
-## Milestones and Phases
-- **Phase 0: Governance Stress Test & Latency PoC (Architect Request)**
-    - **Objective:** Measure "governance tax" and validate distributed system stability under recursive load.
-    - **Task: "Fork Bomb" PoC:** Build a 3-level deep recursive task that triggers concurrent tool calls.
-    - **Measure:** Exact latency, token usage, and Redis connection overhead.
-    - **Goal:** Establish baseline for Asymmetric Control Plane (Sidecar) migration.
-- **Milestone 1:** Unified State, Registry & Shared Memory (Phase 1)
-- **Milestone 2:** Autonomous Execution with Intent Routing & Hard Stops (Phase 2 & 3)
-- **Milestone 3:** Full Traceability & Audit Trail (Phase 4)
-
-## Risks and Mitigations
-- **Risk:** High latency from semantic loop checks.
-    - *Mitigation:* Cache embeddings and use high-performance similarity search (e.g., FAISS or Redis VSS).
-- **Risk:** Recursive depth leading to state bloat.
-    - *Mitigation:* Implement the SSA `Summarizer` node at every recursion level.
-- **Risk:** Complexity of the unified graph.
-    - *Mitigation:* Use subgraphs to isolate execution logic from governance logic.
+### Key Components
+- **Global Orchestrator:** Primary entry point; uses LLM-backed `TaskDecomposer` and intent-routing `ExecutionPlanner`.
+- **Governance Node (Guard):** Shared policy check before every executor step. Uses `PolicyEngine` (YAML rules + LLM semantic guard) and `MemoryManager` (loop detection).
+- **Recursive Executor:** LangGraph `StateGraph` that spawns child graphs for parallel task decomposition at configurable max depth.
+- **Telemetry & Traceability:** Governance decisions recorded in `AgentGuardState.governance_decisions` per run. Full causal graph export pending (Phase 4).
+- **Shared Epistemic Memory:** Redis-backed `MemoryManager` for thought history, embeddings-based loop detection, and blueprint caching.
 
 ---
+
+## Implementation Status
+
+### ✅ Phase 0: Governance Stress Test & Latency PoC
+- **Objective:** Measure governance tax and validate distributed system stability under recursive load.
+- **Completed:** 5-scenario PoC (`poc.py`) validates all governance paths. Latency baseline established:
+  - Keyword/regex rules: <1ms (zero API calls)
+  - Semantic loop detection (embeddings): ~200–400ms per step (cloud API round-trip)
+  - Full recursive run (3 LLM subtasks): ~20–55s (dominated by Gemini API latency)
+
+### ✅ Phase 1: Unified State, Registry & Shared Memory
+- `AgentGuardState` and `GovernanceDecision` unified with `hitl_required` field.
+- `MemoryManager` backed by real Redis with in-memory fallback.
+- Semantic loop detection via cosine similarity on cloud embeddings (Google `gemini-embedding-001` / OpenAI `text-embedding-3-small`).
+- Blueprint cache wired to Redis.
+- **Remaining:** Registry still in-memory — Redis + vector similarity search pending.
+
+### ✅ Phase 2: Governance & Intent Routing
+- `PolicyEngine` loads `policy.yaml` at init; rules compiled at startup.
+- Content rules support `regex` and `contains` operators with `block`, `allow`, `require_hitl` actions.
+- Budget enforcement: per-step ceiling + cumulative cap; state-level `budget_config` overrides policy defaults.
+- Loop detection delegated to `MemoryManager` with configurable threshold and lookback window.
+- LLM semantic guard with structured prompt distinguishing internal task execution from genuine violations.
+- `ExecutionPlanner.route_intent()` uses registry keyword search; full vector-similarity routing pending.
+
+### ✅ Phase 3: Recursive Execution
+- `RecursiveExecutor` builds a `StateGraph` with clean Preflight → Decompose → Plan → Execute → Synthesize lifecycle.
+- `decompose()` uses real LLM with JSON-output prompt; produces clean subtask names (no raw task string leakage).
+- Clean `action`/`intent` strings passed to `check_step()` to prevent policy false-positives.
+- Child graphs spawned at `depth < max_depth - 1`; share parent `root_task_id` and budget.
+- Cost tracking accumulates only for allowed steps.
+
+### 🔄 Phase 4: Telemetry & Observability (Partial)
+- Governance decisions recorded per-step in `AgentGuardState.governance_decisions`.
+- Structured log output with `[ALLOW]` / `[BLOCK]` / `[HITL]` tags.
+- **Remaining:** Machine-readable JSON causal dependency graph artifact per run. Jaeger OTLP tracing integration (defined in `docker-compose.local.yml`, not yet wired).
+
+### ⏳ Phase 5: Validation & Benchmarking (Partial)
+- PoC validated against 5 governance scenarios covering all wedge use cases.
+- **Remaining:** Adversarial prompt injection testing, load testing under concurrent recursive runs, latency regression suite.
+
+---
+
+## LangGraph Graph Design
+
+1. **Entry Node:** `preflight` — `PolicyEngine.check_preflight()` blocks forbidden tasks before any LLM calls
+2. **Decompose Node:** `decompose` — LLM breaks task into clean, focused subtask strings
+3. **Plan Node:** `plan` — intent extraction routes each subtask to the best registered agent
+4. **Execute Node:** `execute_subtasks` — per-step policy check → cost accumulation → recursive child graph
+5. **Synthesize Node:** `synthesize` — joins subtask outputs into `final_answer`
+6. **Reject Node:** `reject` — terminal node for preflight failures
+
+---
+
+## Next Milestones
+
+### Milestone 4: Causal Graph & Audit Trail (Phase 4)
+- Export per-run JSON trace with full decision chain
+- Wire Jaeger OTLP for real-time distributed tracing
+
+### Milestone 5: REST API & Multi-tenancy
+- FastAPI backend from `docker-compose.local.yml`
+- Per-tenant policy scoping and JWT identity propagation (resolves U-05)
+- Python SDK as thin wrapper over REST API
+
+### Milestone 6: Parallel Execution
+- Replace serial `for` loop in `RecursiveExecutor` with LangGraph `Send`
+- Redis-backed Registry with vector similarity search
+
+---
+
+## Risks and Mitigations
+
+| Risk | Mitigation |
+| :--- | :--- |
+| High latency from cloud embedding calls per step | Cache embeddings by content hash in Redis; only embed novel thoughts |
+| Recursive depth leading to state bloat | `Summarizer` node planned at every recursion level; hard max_depth=3 enforced |
+| LLM semantic guard false-positives | Structured prompt with explicit ALLOW bias for internal operations; confirmed in PoC testing |
+| Redis unavailability in production | In-memory fallback active; circuit breaker for governance layer planned (U-07) |
+
+---
+
 *Patterns Referenced:*
 - *Supervisor Architecture [NotebookLM]*
 - *Fractal Chain-of-Thought (FCoT) [NotebookLM]*
