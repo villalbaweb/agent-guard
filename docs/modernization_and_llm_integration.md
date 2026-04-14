@@ -152,14 +152,14 @@ State-level `budget_config` overrides `policy.yaml` values — enables per-run b
 
 ---
 
-## 8. Remaining Gaps (Next Phases)
+## 8. Remaining Gaps (Next Milestone)
 
 - **Concurrency:** Replace serial `for` loop in `RecursiveExecutor` with LangGraph `Send` for true parallel subtask dispatch (requires U-01 Redlock first)
 - **Registry persistence:** Migrate `Registry` from in-memory dict to Redis + vector similarity search (U-09)
 - **Production JWT:** Upgrade from HS256 to RS256 with a JWKS endpoint for key rotation
-- **Durable HITL checkpointer:** `langgraph-checkpoint-redis` wired but not the default install; needs `hitl-redis` optional dependency group activated in production
-- **Load testing:** 10 concurrent runs, p95 latency measurement (Phase 5 follow-on)
-- ~~**Identity propagation:** Implement JWT-based `auth_context` in `AgentGuardState`~~ — **DONE (Step C)**
-- ~~**HITL wiring:** Validate LangGraph `interrupt` propagation in nested subgraphs~~ — **DONE (Step C)**
-- ~~**REST API:** FastAPI backend layer for multi-tenant, language-agnostic enterprise access~~ — **DONE (Step B)**
-- ~~**Causal graph export:** Produce structured JSON trace artifact per run for audit/SOX compliance~~ — **DONE (Step A)**
+- **Durable HITL checkpointer:** `langgraph-checkpoint-redis` wired but not the default install; activate `hitl-redis` optional dependency group in production
+- **Load testing:** 10 concurrent runs, p95 latency measurement
+- **Multi-tenant policy scoping:** Per-request `policy_id` resolution (U-11)
+- **MCP integration:** PolicyGuard proxy middleware for MCP tool calls (U-03)
+
+See `unknown_items.md` for the full open-items register.

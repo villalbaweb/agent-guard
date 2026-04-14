@@ -396,22 +396,4 @@ Each agent declares its own required policy constraints at registration time. Th
 
 ---
 
-## 13. Future Roadmap: Agentic Marketplace
-
-Beyond the MVP, AgentGuard aims to implement the **Contract-Net Marketplace** pattern for dynamic, market-driven task allocation.
-
-- **Bidding System:** Agents respond to task announcements with "Bids" containing their model confidence, estimated USD cost, and ETA.
-- **Utility Selection:** The Orchestrator awards tasks based on a dynamic utility function — real-time trade-offs between cost, quality, and speed.
-- **Distributed Negotiation:** Enables scaling across diverse, heterogeneous pools of specialized agents with fluctuating availability.
-- **Agent self-registration:** `POST /agents/register` replaces static `dependencies.py` wiring; agents register on pod startup and deregister on shutdown.
-- **Vector search routing:** `search_by_intent()` replaced with cosine similarity against embedded `semantic_description` fields (Redis VSS or pgvector).
-
----
-
-*Patterns Referenced:*
-- *Causal Dependency Graph [NotebookLM]*
-- *Pass-by-Reference Context [NotebookLM]*
-- *Watchdog Timeout Supervisor [NotebookLM]*
-- *Adaptive Retry with Prompt Mutation [NotebookLM]*
-- *Capability Registry & Agent Router [NotebookLM]*
-- *Contract-Net Marketplace [NotebookLM]*
+*Patterns referenced: Causal Dependency Graph · Capability Registry & Agent Router · Watchdog / Semantic Guardrail · Shared Epistemic Memory · Supervisor Architecture.*
