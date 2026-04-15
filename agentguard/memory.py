@@ -11,6 +11,12 @@ Loop detection strategies:
   - semantic  : cosine similarity on embeddings from the local inference service.
                 Requires the embeddings container from docker-compose.poc.yml.
   - exact     : string equality on action+intent (fallback when embeddings unavailable).
+
+Concurrency Note:
+  With parallel execution (via LangGraph Send), multiple workers may call `record_thought`
+  and `detect_loop` concurrently for the same `run_id`. Because loop detection checks
+  similarity against any recent thought (not a specific sequence), interleaved ordering
+  does not affect correctness. Redis `SET`/`GET` operations are atomic.
 """
 import json
 import math

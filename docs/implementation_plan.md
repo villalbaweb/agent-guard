@@ -197,9 +197,10 @@ See `unknown_items.md` for the full open-items register. Key items:
 
 | Item | Blocker |
 |:-----|:--------|
-| Parallel subtask execution (`Send`) | Requires Redlock for distributed coordinator (U-01, U-10) |
 | Vector similarity routing in Registry | Redis VSS migration (U-09) |
 | RS256 / JWKS JWT verification | Production identity provider integration |
 | Multi-tenant policy scoping | Per-request `policy_id` resolution (U-11) |
 | MCP proxy integration | MCP framework selection (U-03) |
+| Embedding cache | Redis hash-based caching to cut round-trip latency (U-08) |
+ion | MCP framework selection (U-03) |
 | Embedding cache | Redis hash-based caching to cut round-trip latency (U-08) |

@@ -154,7 +154,7 @@ State-level `budget_config` overrides `policy.yaml` values — enables per-run b
 
 ## 8. Remaining Gaps (Next Milestone)
 
-- **Concurrency:** Replace serial `for` loop in `RecursiveExecutor` with LangGraph `Send` for true parallel subtask dispatch (requires U-01 Redlock first)
+- **Concurrency:** Implemented true parallel subtask dispatch using the LangGraph `Send` API and `Annotated` reducer functions. No distributed locking (Redlock) is required.
 - **Registry persistence:** Migrate `Registry` from in-memory dict to Redis + vector similarity search (U-09)
 - **Production JWT:** Upgrade from HS256 to RS256 with a JWKS endpoint for key rotation
 - **Durable HITL checkpointer:** `langgraph-checkpoint-redis` wired but not the default install; activate `hitl-redis` optional dependency group in production

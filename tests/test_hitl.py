@@ -81,14 +81,12 @@ class TestHITLDetection:
         executor = _make_executor(policy=policy)
 
         state = _make_state(
-            all_edges=[{"task": "Transfer $1M", "agent_id": "financial_agent"}],
+            _current_edge={"task": "Transfer $1M", "agent_id": "financial_agent"},
         )
         # Patch planner to skip LLM calls
         executor.planner = MagicMock()
-        executor.planner.decompose.return_value = {"all_edges": state["all_edges"]}
-        executor.planner.plan.return_value = {"all_edges": state["all_edges"], "all_agents": []}
 
-        result = executor._node_execute_subtasks(state, config=None)
+        result = executor._node_worker(state, config=None)
         assert result["global_signal"] == "HITL_PENDING"
 
     def test_hitl_trace_event_has_hitl_pending_status(self):
@@ -96,9 +94,9 @@ class TestHITLDetection:
         policy = _mock_policy(allowed=False, hitl=True, reason="HITL required.")
         executor = _make_executor(policy=policy)
         state = _make_state(
-            all_edges=[{"task": "Wire transfer", "agent_id": "bank_agent"}],
+            _current_edge={"task": "Wire transfer", "agent_id": "bank_agent"},
         )
-        result = executor._node_execute_subtasks(state, config=None)
+        result = executor._node_worker(state, config=None)
         hitl_events = [e for e in result["trace_events"] if e.get("status") == "hitl_pending"]
         assert len(hitl_events) >= 1
 
@@ -107,9 +105,9 @@ class TestHITLDetection:
         policy = _mock_policy(allowed=False, hitl=False, reason="Content blocked.")
         executor = _make_executor(policy=policy)
         state = _make_state(
-            all_edges=[{"task": "Forbidden task", "agent_id": "agent_x"}],
+            _current_edge={"task": "Forbidden task", "agent_id": "agent_x"},
         )
-        result = executor._node_execute_subtasks(state, config=None)
+        result = executor._node_worker(state, config=None)
         blocked_events = [e for e in result["trace_events"] if e.get("status") == "blocked"]
         assert len(blocked_events) >= 1
 
@@ -118,11 +116,10 @@ class TestHITLDetection:
         policy = _mock_policy(allowed=False, hitl=True, reason="Needs approval.")
         executor = _make_executor(policy=policy)
         state = _make_state(
-            all_edges=[{"task": "Pay vendor", "agent_id": "pay_agent"}],
+            _current_edge={"task": "Pay vendor", "agent_id": "pay_agent"},
         )
-        result = executor._node_execute_subtasks(state, config=None)
-        output = result["results"].get("subtasks_output", {})
-        assert any("HITL_PENDING" in str(v) for v in output.values())
+        result = executor._node_worker(state, config=None)
+        assert any("HITL_PENDING" in str(v) for v in result.get("results", {}).values())
 
     def test_allowed_step_has_ok_status(self):
         """Allowed steps produce trace events with status == 'ok'."""
@@ -131,12 +128,12 @@ class TestHITLDetection:
         # depth=1 so no recursive child graph is spawned
         state = _make_state(
             depth=1,
-            all_edges=[{"task": "Research trends", "agent_id": "search_agent_01"}],
+            _current_edge={"task": "Research trends", "agent_id": "search_agent_01"},
         )
-        result = executor._node_execute_subtasks(state, config=None)
+        result = executor._node_worker(state, config=None)
         step_events = [
             e for e in result["trace_events"]
-            if e.get("node") == "execute_subtasks" and e.get("action") and e["action"].startswith("invoke_")
+            if e.get("node") == "worker" and e.get("action") and e["action"].startswith("invoke_")
         ]
         assert all(e["status"] == "ok" for e in step_events)
 
@@ -168,8 +165,8 @@ class TestAuthPropagation:
         result = executor._node_preflight(state, config=None)
         assert result["global_signal"] == "REJECT"
 
-    def test_expired_auth_blocks_execute_step(self):
-        """Expired auth_context in execute_subtasks emits error trace events."""
+    def test_expired_auth_blocks_worker_step(self):
+        """Expired auth_context in worker emits error trace events."""
         now = datetime.now(timezone.utc)
         expired = AuthContext(
             subject="expired-user", tenant_id="t", roles=["user"],
@@ -180,8 +177,8 @@ class TestAuthPropagation:
         executor = _make_executor(policy=policy)
         state = _make_state(
             auth_context=expired.to_dict(),
-            all_edges=[{"task": "Run query", "agent_id": "agent_01"}],
+            _current_edge={"task": "Run query", "agent_id": "agent_01"},
         )
-        result = executor._node_execute_subtasks(state, config=None)
+        result = executor._node_worker(state, config=None)
         error_events = [e for e in result["trace_events"] if e.get("status") == "error"]
         assert len(error_events) >= 1
