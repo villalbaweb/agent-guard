@@ -18,6 +18,7 @@ from typing import Optional, Annotated
 
 from fastapi import Depends, Header, HTTPException, status
 
+from agentguard.db import DatabaseManager
 from agentguard.memory import MemoryManager
 from agentguard.registry import Registry
 from agentguard.executor import RecursiveExecutor
@@ -37,22 +38,39 @@ def get_memory() -> MemoryManager:
 
 
 @lru_cache(maxsize=1)
+def get_database() -> DatabaseManager:
+    """Singleton PostgreSQL connection pool. Returns an unavailable manager
+    (available=False) when DATABASE_URL is not set — callers degrade gracefully."""
+    return DatabaseManager()
+
+
+@lru_cache(maxsize=1)
 def get_registry() -> Registry:
-    registry = Registry()
-    registry.register(
-        item_id="search_agent_01",
-        role="Search Specialist",
-        semantic_description="Searches the web for any topic or query.",
-        input_schema={"query": "string"},
-        output_schema={"results": "list"},
-    )
-    registry.register(
-        item_id="analysis_agent_01",
-        role="Data Analyst",
-        semantic_description="Analyzes datasets and provides structured insights.",
-        input_schema={"data": "string"},
-        output_schema={"analysis": "string"},
-    )
+    """Singleton agent registry — backed by PostgreSQL when available.
+
+    Seeds two default agents on first call if the registry is empty.
+    NOTE: @lru_cache(maxsize=1) ensures the executor, planner, and REST routes
+    all share the same instance with hot in-memory data.
+    """
+    registry = Registry(db=get_database())
+
+    # Seed default agents only when the registry is empty.
+    # In PostgreSQL mode this avoids re-inserting agents on every restart.
+    if not registry.list_all():
+        registry.register(
+            item_id="search_agent_01",
+            role="Search Specialist",
+            semantic_description="Searches the web for any topic or query.",
+            input_schema={"query": "string"},
+            output_schema={"results": "list"},
+        )
+        registry.register(
+            item_id="analysis_agent_01",
+            role="Data Analyst",
+            semantic_description="Analyzes datasets and provides structured insights.",
+            input_schema={"data": "string"},
+            output_schema={"analysis": "string"},
+        )
     return registry
 
 

@@ -48,9 +48,9 @@ This document describes each module in the `agentguard/` package — its functio
 ### [registry.py](file:///d:/Git/agent-guard/agentguard/registry.py)
 - **Function:** Central "Yellow Pages" where agents and tools register their metadata (role, semantic description, input/output schemas).
 - **Agentic Pattern:** **Capability Registry** — enforces intent-based discovery over hard-coded function calls.
-- **Current backend:** In-memory dict with substring-match `search_by_intent()`.
-- **Next step:** Redis-backed storage + vector similarity search to replace substring matching.
-- **Status:** ⚠️ Partially implemented (in-memory, no vector search yet)
+- **Current backend:** PostgreSQL-backed storage + pgvector similarity search in `search_by_intent()`. Falls back to in-memory substring matching if the database is unavailable.
+- **Dynamic Registration:** Supports runtime agent registration via REST API instead of static hardcoding, and tracks agent health via `AgentHealthChecker`.
+- **Status:** ✅ Implemented
 
 ---
 

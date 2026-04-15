@@ -27,6 +27,7 @@ subgraph AgentGuard
     POL[Policy Engine<br/>Guard/Compliance]
     REC[Recursive Executor<br/>Worker Subgraphs]
     MEM[Memory Manager]
+    DB[Database Manager<br/>PostgreSQL]
 end
 
 API --> ORC
@@ -35,6 +36,8 @@ ORC --> REC
 REC <--> POL
 ORC <--> MEM
 MEM <--> Redis
+ORC <--> DB
+API <--> DB
 ```
 
 ## 3. Core Use Cases (MVP)
@@ -45,7 +48,7 @@ MEM <--> Redis
 ## 4. System Context and Integrations
 - **LLM Providers:** Supports OpenAI, Anthropic, and Vertex AI.
 - **Tools:** Integrates with web search, filesystem, and specialized domain tools via the **Model Context Protocol (MCP)**.
-- **Persistence:** Uses LangGraph checkpointers for short-term state and Redis for long-term shared memory.
+- **Persistence:** Uses LangGraph checkpointers for short-term state, Redis for long-term shared memory, and PostgreSQL (pgvector) for the dynamic agent capability registry.
 
 ## 5. LangGraph Graphs and Agents
 
@@ -107,14 +110,14 @@ sequenceDiagram
 - **Node: Context Summarizer:** Compresses verbose outputs to prevent context overflow.
 
 ### 5.4 Capability Registry (The "Yellow Pages")
-AgentGuard maintains a central **Registry Service** (Redis-backed) where all specialized agents and MCP tools register their metadata.
-- **Metadata Fields:** `id`, `role`, `semantic_description`, `input_schema`, `output_schema`, and `endpoint`.
-- **Discovery:** The `ExecutionPlanner` queries this registry using semantic search (vector similarity) to find the best agent/tool for a specific task intent.
+AgentGuard maintains a central **Registry Service** (PostgreSQL-backed) where all specialized agents and MCP tools register their metadata dynamically via HTTP up-calls.
+- **Metadata Fields:** `id`, `role`, `semantic_description`, `input_schema`, `output_schema`, `endpoint`, `is_active`, and `health_status`.
+- **Discovery:** The `ExecutionPlanner` queries this registry using semantic search (vector similarity with pgvector's HNSW index) to find the best agent/tool for a specific task intent.
 
 ### 5.5 Intent-Based Routing (The "Switchboard")
-The `ExecutionPlanner` serves as the system's primary router, following a two-step safety protocol:
-1.  **Intent Extraction:** An LLM-based module translates user/recursive tasks into structured **Intent Objects** (Action + Resource).
-2.  **Graph-Constrained Lookup:** The Intent is validated against a **Capability Graph** (Whitelist). If no authorized path exists between the intent and a registered agent, the task is rejected. This prevents agents from attempting tasks outside their safety guardrails.
+The `ExecutionPlanner` serves as the system's primary router.
+1. **Vector-Based Routing (Fast Path):** When PostgreSQL+pgvector is active, the raw subtask text is embedded and compared directly against agent `semantic_description` embeddings using cosine similarity. Zero per-subtask LLM calls are needed.
+2. **Intent Extraction (Fallback):** If vector search is unavailable, an LLM-based module extracts a single-word intent verb from the subtask, and performs a substring lookup against the in-memory registry.
 
 ## 6. Data Model and State Management
 ### 6.1 Unified AgentGuardState
@@ -156,13 +159,19 @@ class AgentGuardState(TypedDict):
 
 | Method | Path | Auth | Description |
 |:-------|:-----|:-----|:------------|
-| `GET` | `/health` | None | Redis + LLM liveness probe |
+| `GET` | `/health` | None | Redis + Postgres + LLM liveness probe |
 | `POST` | `/runs` | Bearer / API key | Submit task; returns `run_id` immediately (background) |
 | `GET` | `/runs/{id}` | Bearer / API key | Status, `final_answer`, cost, governance summary |
 | `GET` | `/runs/{id}/trace` | Bearer / API key | Download full trace JSON (Step A artifact) |
 | `POST` | `/runs/{id}/approve` | Bearer + `approver` role | Approve/reject HITL_PENDING step; resumes graph |
 | `GET` | `/policy` | Bearer / API key | Return active `policy.yaml` rules |
 | `POST` | `/policy/reload` | Bearer / API key | Hot-reload policy without restart |
+| `POST` | `/agents/register` | Bearer / API key | Register or update an agent (upsert) |
+| `GET` | `/agents` | Bearer / API key | List all active agents |
+| `GET` | `/agents/{id}` | Bearer / API key | Get a single agent by ID |
+| `DELETE` | `/agents/{id}` | Bearer / API key | Soft-deactivate an agent |
+| `POST` | `/agents/{id}/activate` | Bearer / API key | Re-activate a deactivated agent |
+| `POST` | `/agents/search` | Bearer / API key | Search agents by natural-language intent |
 
 Run state machine: `queued → running → {completed | blocked | hitl_pending | error}`.  
 `hitl_pending` transitions to `completed` or `blocked` via `POST /approve`.
@@ -191,18 +200,20 @@ Run state machine: `queued → running → {completed | blocked | hitl_pending |
 
 ### 11.1 What the Registry Is
 
-The `Registry` is the system's "Yellow Pages" — a catalog of every agent and tool available for the executor to route work to. The `ExecutionPlanner` consults it when mapping a subtask to an agent: it extracts an intent verb from the subtask, searches the registry, and routes to the best match.
+The `Registry` is the system's "Yellow Pages" — a catalog of every agent and tool available for the executor to route work to. The `ExecutionPlanner` consults it when mapping a subtask to an agent. Because the registry is dynamic, agents can register themselves at runtime using the REST API without requiring a code change or server redeploy.
 
-Every registered agent has five metadata fields:
+Every registered agent has several metadata fields:
 
 | Field | Purpose | Example |
 |:------|:--------|:--------|
 | `id` | Stable unique identifier | `"trade_execution_agent"` |
 | `role` | Human-readable capability label | `"Trade Execution Specialist"` |
-| `semantic_description` | Full prose description — the text the intent router embeds for similarity search | `"Constructs FIX order tickets, routes to execution venues..."` |
+| `semantic_description` | Full prose description — embedded via LLM API and stored as a vector for semantic routing | `"Constructs FIX order tickets, routes to execution venues..."` |
 | `input_schema` | Expected inputs (used for validation and prompt construction) | `{"ticker": "string", "quantity": "int"}` |
 | `output_schema` | Output contract | `{"order_id": "string", "fill_price": "float"}` |
 | `endpoint` | Optional HTTP endpoint for remote agents | `"https://agents.internal/trade"` |
+| `is_active` | Boolean toggle for agent availability | `true` |
+| `health_status` | Status from background health checker | `"healthy"` |
 
 ### 11.2 Agent Lifecycle
 
@@ -210,35 +221,35 @@ Every registered agent has five metadata fields:
 Agent pod starts up
        │
        ▼
-registry.register(id, role, description, schemas)   ← today: called at server init
-       │                                                future: POST /agents/register
+POST /agents/register { "id": "search_01", "role": "Search", ... }
+       │
        ▼
-ExecutionPlanner.plan() called for a subtask
+(AgentGuard embeds semantic_description and upserts to PostgreSQL + pgvector)
        │
-       ├── LLM extracts intent verb ("execute", "analyze", "search", ...)
+       ▼
+ExecutionPlanner.plan() called for a subtask ("Find Q3 MSFT earnings")
        │
-       ├── registry.search_by_intent(intent)
-       │     current: substring match on role + semantic_description
-       │     future:  cosine similarity on embedded semantic_description (U-09)
+       ├── AgentGuard embeds the full subtask string
        │
-       └── returns ranked agent list → executor picks agents[0]
+       ├── registry.search_by_intent(subtask) queries PostgreSQL
+       │     `SELECT ... FROM agent_registry ORDER BY embedding <=> $1 LIMIT 1`
+       │
+       └── returns top-matching agent → executor picks it
                   │
                   ▼
        PolicyEngine.check_step(action="invoke_{agent_id}", intent=...)
                   │
-          ALLOW → executor invokes agent (LLM call or HTTP call)
+          ALLOW → executor invokes agent (LLM call or HTTP call to its endpoint)
           BLOCK → step denied, trace event emitted
           HITL  → graph pauses, waits for human approval
 ```
 
-### 11.3 Current Limitations
+### 11.3 Graceful Degradation & Fallback
 
-- **Static registration:** agents are hardcoded in `dependencies.py::get_registry()` at server startup. No self-registration or hot-add.
-- **Substring matching:** `search_by_intent()` does a case-insensitive substring scan — accurate with 2–3 agents, degrades with 10+.
-- **No persistence:** registry lives in-memory; restarting the server loses all registrations.
-- **No agent health:** no liveness check; a registered agent with a dead endpoint is not removed.
-
-These are tracked as **U-09** and **U-12** in `unknown_items.md`.
+The AgentGuard registry is designed to be highly resilient:
+- **Missing Database:** If `DATABASE_URL` is omitted, the registry degrades to a purely in-memory dictionary.
+- **Routing Fallback:** If vector search is unavailable, `ExecutionPlanner` falls back to its legacy mode: it uses an LLM to extract a single-word intent verb from the text, and performs a simple case-insensitive substring scan over the agents.
+- **Background Health Checks:** A background task (`AgentHealthChecker`) periodically probes the `endpoint` of registered agents. Agents failing $N$ consecutive health checks are marked `unhealthy` but remain in the registry until hard-deleted.
 
 ---
 

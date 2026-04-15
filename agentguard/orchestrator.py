@@ -57,36 +57,54 @@ class ExecutionPlanner:
         return self.registry.search_by_intent(intent)
 
     def plan(self, state: AgentGuardState) -> AgentGuardState:
-        """Map each subtask to the best available agent via intent extraction."""
+        """Map each subtask to the best available agent via intent extraction.
+
+        Optimisation (U-09): when the Registry is backed by PostgreSQL + pgvector,
+        the full subtask text is embedded and compared against agent descriptions
+        directly — no per-subtask LLM call is needed for intent extraction.
+        When PostgreSQL is *not* available the original LLM-based intent
+        extraction + substring search is used as a fallback.
+        """
         subtasks = state.get("results", {}).get("subtasks", [])
         available_tools = "\n".join(
             f"- {a['role']}: {a['semantic_description']}"
             for a in self.registry.list_all()
         )
 
+        # Check if vector search is active on the registry
+        vector_search_active = getattr(self.registry, "_db", None) is not None
+
         edges = []
         for subtask in subtasks:
-            intent = "analyze"  # safe default
-
-            if self.llm:
-                prompt = (
-                    f"You are a router. Given this subtask, pick the best matching role "
-                    f"from the list below and respond with ONLY the primary action verb "
-                    f"(one lowercase word like 'search' or 'analyze').\n\n"
-                    f"Subtask: {subtask}\n\n"
-                    f"Available roles:\n{available_tools}"
+            if vector_search_active:
+                # Fast path: embed the full subtask, compare directly against
+                # agent embeddings — one vector DB query, zero LLM calls.
+                agents = self.registry.search_by_intent(subtask)
+                logger.debug(
+                    f"ExecutionPlanner: vector-routed '{subtask[:60]}' → "
+                    f"{agents[0]['id'] if agents else 'fallback'}"
                 )
-                try:
-                    result = self.llm.invoke(prompt)
-                    raw = normalize_llm_output(result.content).strip().lower()
-                    # Take only the first word to avoid multi-word responses
-                    intent = raw.split()[0] if raw else "analyze"
-                except Exception as e:
-                    logger.error(f"ExecutionPlanner: intent extraction failed ({e}).")
             else:
-                intent = "search" if "search" in subtask.lower() else "analyze"
+                # Fallback path: LLM intent extraction + substring search.
+                intent = "analyze"  # safe default
+                if self.llm:
+                    prompt = (
+                        f"You are a router. Given this subtask, pick the best matching role "
+                        f"from the list below and respond with ONLY the primary action verb "
+                        f"(one lowercase word like 'search' or 'analyze').\n\n"
+                        f"Subtask: {subtask}\n\n"
+                        f"Available roles:\n{available_tools}"
+                    )
+                    try:
+                        result = self.llm.invoke(prompt)
+                        raw = normalize_llm_output(result.content).strip().lower()
+                        intent = raw.split()[0] if raw else "analyze"
+                    except Exception as e:
+                        logger.error(f"ExecutionPlanner: intent extraction failed ({e}).")
+                else:
+                    intent = "search" if "search" in subtask.lower() else "analyze"
+                agents = self.route_intent(intent)
 
-            agents = self.route_intent(intent)
             edges.append({
                 "task": subtask,
                 "agent_id": agents[0]["id"] if agents else "fallback_agent",

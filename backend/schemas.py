@@ -90,8 +90,61 @@ class PolicyReloadResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded", "unhealthy"]
     redis: Literal["ok", "unavailable"]
+    postgres: Literal["ok", "unavailable"]   # U-09/U-12
     llm: Literal["ok", "unavailable"]
     timestamp: datetime
+
+
+# --------------------------------------------------------------------------- #
+#  Agent Registry Models  (U-09 / U-12)                                       #
+# --------------------------------------------------------------------------- #
+
+class AgentRegisterRequest(BaseModel):
+    id: str = Field(
+        ...,
+        description="Stable unique agent identifier.",
+        min_length=1,
+        max_length=128,
+    )
+    role: str = Field(..., description="Human-readable capability label.")
+    semantic_description: str = Field(
+        ..., description="Prose description for intent routing."
+    )
+    input_schema: Dict[str, Any] = Field(default_factory=dict)
+    output_schema: Dict[str, Any] = Field(default_factory=dict)
+    endpoint: str = Field("", description="Optional HTTP endpoint for remote agents.")
+
+
+class AgentRegisterResponse(BaseModel):
+    id: str
+    role: str
+    semantic_description: str
+    input_schema: Dict[str, Any]
+    output_schema: Dict[str, Any]
+    endpoint: str
+    is_active: bool
+    has_embedding: bool
+    health_status: str = "unknown"
+    last_heartbeat: Optional[datetime] = None
+    registered_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class AgentSearchRequest(BaseModel):
+    intent: str = Field(
+        ..., description="Natural-language intent to match against agent descriptions."
+    )
+    limit: int = Field(5, ge=1, le=50, description="Maximum number of results.")
+
+
+class AgentSearchResponse(BaseModel):
+    results: List[AgentRegisterResponse]
+    search_method: str  # "vector_similarity" | "substring_match" | "in_memory"
+
+
+class AgentListResponse(BaseModel):
+    agents: List[AgentRegisterResponse]
+    total: int
 
 
 # --------------------------------------------------------------------------- #

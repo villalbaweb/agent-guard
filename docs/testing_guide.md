@@ -13,8 +13,9 @@ Open PowerShell in `D:\Git\agent-guard` and confirm the environment is ready:
 # Python version (needs 3.13+)
 uv run python --version
 
-# Redis container is healthy
+# Redis and Postgres containers are healthy
 docker ps | Select-String "redis"
+docker ps | Select-String "postgres"
 
 # Google API key is set
 Get-Content .env | Select-String "GOOGLE_API_KEY"
@@ -23,7 +24,7 @@ Get-Content .env | Select-String "GOOGLE_API_KEY"
 If Redis is not running:
 
 ```powershell
-docker compose -f docker-compose.poc.yml up redis -d
+docker compose -f docker-compose.poc.yml up -d
 ```
 
 ---
@@ -36,15 +37,19 @@ Validates all logic in isolation. Always run this first.
 uv run pytest tests/ -v
 ```
 
-**Expected:** `65 passed, 0 failed`
+**Expected:** `126 passed, 11 skipped, 0 failed`
 
 Run individual suites to isolate a layer:
 
 ```powershell
-uv run pytest tests/test_trace.py -v   # causal graph serializer  (20 tests)
-uv run pytest tests/test_auth.py  -v   # JWT + AuthContext         (16 tests)
-uv run pytest tests/test_hitl.py  -v   # HITL + auth propagation   ( 8 tests)
-uv run pytest tests/test_api.py   -v   # REST API (fully mocked)   (21 tests)
+uv run pytest tests/test_trace.py -v          # causal graph serializer  (20 tests)
+uv run pytest tests/test_auth.py  -v          # JWT + AuthContext        (16 tests)
+uv run pytest tests/test_hitl.py  -v          # HITL + auth propagation  ( 8 tests)
+uv run pytest tests/test_api.py   -v          # REST API (fully mocked)  (21 tests)
+uv run pytest tests/test_db.py -v             # DatabaseManager          (8 tests)
+uv run pytest tests/test_registry.py -v       # pgvector registry        (17 tests)
+uv run pytest tests/test_agents_api.py -v     # APIs for agents          (20 tests)
+uv run pytest tests/test_health_checker.py -v # Health background task   (7 tests)
 ```
 
 ---
@@ -142,6 +147,7 @@ Invoke-RestMethod http://localhost:8000/health
 ```
 status    : ok
 redis     : ok
+postgres  : ok
 llm       : ok
 timestamp : 2026-04-10T...
 ```
@@ -318,7 +324,7 @@ try {
 
 | # | Check | How to verify |
 |:--|:------|:--------------|
-| 1 | 65 unit tests pass | `uv run pytest tests/ -v` |
+| 1 | 126 unit tests pass | `uv run pytest tests/ -v` |
 | 2 | PoC runs all 5 scenarios without crash | Step 2 |
 | 3 | Blocked runs are instant (`<0.1s`, `$0.00`) | Scenarios 2 & 3 in PoC log |
 | 4 | Budget cap stops execution mid-run | Scenario 4 in PoC log |
