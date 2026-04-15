@@ -13,7 +13,8 @@
       "Bash(uv pip:*)",
       "Bash(ls:*)",
       "Bash(Get-Content \"D:\\\\Git\\\\agent-guard\\\\docs\\\\testing_guide.md\")",
-      "Bash(Measure-Object -Line)"
+      "Bash(Measure-Object -Line)",
+      "Bash(PYTHONPATH=. AGENTGUARD_NO_AUTH=1 uv run python examples/asset_management.py)"
     ]
   }
 }

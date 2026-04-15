@@ -58,7 +58,7 @@ flowchart LR
     BP -->|Cache Hit| Guard{Policy Guard}
     Plan --> Guard
     
-    Guard -->|Allow| Exec[Graph Executor]
+    Guard -->|Allow| Exec[worker × N]
     Guard -->|Block| REJECT((REJECT))
     
     Exec --> Synth[Synthesizer]
@@ -397,3 +397,4 @@ Each agent declares its own required policy constraints at registration time. Th
 ---
 
 *Patterns referenced: Causal Dependency Graph · Capability Registry & Agent Router · Watchdog / Semantic Guardrail · Shared Epistemic Memory · Supervisor Architecture.*
+chdog / Semantic Guardrail · Shared Epistemic Memory · Supervisor Architecture.*
