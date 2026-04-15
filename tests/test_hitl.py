@@ -13,7 +13,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 from datetime import datetime, timezone, timedelta
 
-from agentguard.state import AgentGuardState, GovernanceDecision
+from agentguard.state import AgentGuardState, GovernanceDecision, make_initial_state
 from agentguard.executor import RecursiveExecutor
 from agentguard.auth import make_auth_context, AuthContext
 
@@ -24,22 +24,12 @@ from agentguard.auth import make_auth_context, AuthContext
 
 def _make_state(task="test task", budget=None, auth_context=None, **overrides) -> AgentGuardState:
     auth = auth_context or make_auth_context("test-user").to_dict()
-    base = AgentGuardState(
+    base = make_initial_state(
         task=task,
         subject="test",
         root_task_id="hitl_test_run",
-        parent_node_id="root",
-        depth=0,
-        results={},
-        all_agents=[],
-        all_edges=[],
-        global_signal="",
-        usage_stats={"total_cost": 0.0},
-        budget_config=budget or {},
-        governance_decisions=[],
-        trace_events=[],
+        budget_config=budget,
         auth_context=auth,
-        parent_trace_event_id=None,
     )
     base.update(overrides)
     return base

@@ -1,5 +1,6 @@
 from typing import TypedDict, Dict, List, Any, Optional, Annotated
 import operator
+import uuid
 
 class GovernanceDecision(TypedDict):
     action: str
@@ -42,3 +43,36 @@ class AgentGuardState(TypedDict):
     auth_context: Dict[str, Any]         # JWT-derived caller identity (Step C)
     parent_trace_event_id: Optional[str] # event_id of the parent graph's execute_subtasks event
     _current_edge: Optional[Dict[str, Any]] # injected during Send for parallel workers
+
+def make_initial_state(
+    task: str,
+    subject: str = "anonymous",
+    budget_config: Optional[Dict[str, float]] = None,
+    root_task_id: Optional[str] = None,
+    auth_context: Optional[Dict[str, Any]] = None,
+    depth: int = 0,
+    parent_node_id: str = "root",
+    parent_trace_event_id: Optional[str] = None,
+) -> AgentGuardState:
+    """Factory helper to initialize AgentGuardState with sensible defaults.
+
+    Reduces boilerplate for customers using the SDK and developers writing tests.
+    """
+    return AgentGuardState(
+        task=task,
+        subject=subject,
+        root_task_id=root_task_id or str(uuid.uuid4()),
+        parent_node_id=parent_node_id,
+        depth=depth,
+        results={},
+        all_agents=[],
+        all_edges=[],
+        global_signal="OK",
+        usage_stats={"total_cost": 0.0},
+        budget_config=budget_config or {},
+        governance_decisions=[],
+        trace_events=[],
+        auth_context=auth_context or {},
+        parent_trace_event_id=parent_trace_event_id,
+        _current_edge=None,
+    )

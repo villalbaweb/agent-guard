@@ -296,8 +296,7 @@ Authorization: Bearer <approver_jwt>
 Import `agentguard` directly and compose the governance layer in code. Full control over the registry, state, and graph lifecycle.
 
 ```python
-from agentguard import AgentGuardState, MemoryManager, Registry, RecursiveExecutor
-from agentguard.auth import make_auth_context
+from agentguard import make_initial_state, MemoryManager, Registry, RecursiveExecutor
 
 # Build the agent registry for your domain
 registry = Registry()
@@ -317,21 +316,10 @@ memory   = MemoryManager()
 executor = RecursiveExecutor(memory_manager=memory, registry=registry, max_depth=2)
 graph    = executor.build_graph()
 
-state = AgentGuardState(
+state = make_initial_state(
     task="Analyze MSFT Q3 earnings and update price target",
     subject=auth.subject,
-    root_task_id="run_001",
-    parent_node_id="root",
-    depth=0,
-    results={},
-    all_agents=[], all_edges=[],
-    global_signal="",
-    usage_stats={"total_cost": 0.0},
     budget_config={"max_cost_usd": 2.00},
-    governance_decisions=[],
-    trace_events=[],
-    auth_context=auth.to_dict(),
-    parent_trace_event_id=None,
 )
 
 final = graph.invoke(state)

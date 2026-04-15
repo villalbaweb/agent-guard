@@ -20,7 +20,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.types import Send
 from langchain_core.runnables import RunnableConfig
 
-from .state import AgentGuardState, GovernanceDecision
+from .state import AgentGuardState, GovernanceDecision, make_initial_state
 from .policy import PolicyEngine
 from .orchestrator import ExecutionPlanner
 from .memory import MemoryManager
@@ -362,20 +362,13 @@ class RecursiveExecutor:
         result_value = f"[{agent_role}] Completed: {subtask}"
         
         if current_depth < self.max_depth - 1:
-            child_state = AgentGuardState(
+            child_state = make_initial_state(
                 task=subtask,
                 subject=state.get("subject", ""),
                 root_task_id=state.get("root_task_id", "default"),
                 parent_node_id=agent_id,
                 depth=current_depth + 1,
-                results={},
-                all_agents=[],
-                all_edges=[],
-                global_signal="",
-                usage_stats={"total_cost": 0.0},
                 budget_config=state.get("budget_config", {}),
-                governance_decisions=[],
-                trace_events=[],
                 auth_context=state.get("auth_context", {}),
                 parent_trace_event_id=exec_event_id,
             )

@@ -37,7 +37,7 @@ Validates all logic in isolation. Always run this first.
 uv run pytest tests/ -v
 ```
 
-**Expected:** `126 passed, 11 skipped, 0 failed`
+**Expected:** `140 passed, 0 skipped, 0 failed`
 
 Run individual suites to isolate a layer:
 
@@ -46,10 +46,12 @@ uv run pytest tests/test_trace.py -v          # causal graph serializer  (20 tes
 uv run pytest tests/test_auth.py  -v          # JWT + AuthContext        (16 tests)
 uv run pytest tests/test_hitl.py  -v          # HITL + auth propagation  ( 8 tests)
 uv run pytest tests/test_api.py   -v          # REST API (fully mocked)  (21 tests)
-uv run pytest tests/test_db.py -v             # DatabaseManager          (8 tests)
-uv run pytest tests/test_registry.py -v       # pgvector registry        (17 tests)
+uv run pytest tests/test_db.py -v             # DatabaseManager          (13 tests)
+uv run pytest tests/test_registry.py -v       # pgvector registry        (23 tests)
 uv run pytest tests/test_agents_api.py -v     # APIs for agents          (20 tests)
 uv run pytest tests/test_health_checker.py -v # Health background task   (7 tests)
+uv run pytest tests/test_parallel.py -v       # Parallel execution       (9 tests)
+uv run pytest tests/test_state.py -v          # State factory            (3 tests)
 ```
 
 ---
@@ -324,7 +326,7 @@ try {
 
 | # | Check | How to verify |
 |:--|:------|:--------------|
-| 1 | 126 unit tests pass | `uv run pytest tests/ -v` |
+| 1 | 140 unit tests pass | `uv run pytest tests/ -v` |
 | 2 | PoC runs all 5 scenarios without crash | Step 2 |
 | 3 | Blocked runs are instant (`<0.1s`, `$0.00`) | Scenarios 2 & 3 in PoC log |
 | 4 | Budget cap stops execution mid-run | Scenario 4 in PoC log |

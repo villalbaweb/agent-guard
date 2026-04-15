@@ -22,7 +22,7 @@ try:
 except ImportError:
     pass
 
-from agentguard import AgentGuardState, MemoryManager, Registry, RecursiveExecutor
+from agentguard import AgentGuardState, make_initial_state, MemoryManager, Registry, RecursiveExecutor
 from agentguard.llm import get_embeddings
 from agentguard.auth import anonymous_context
 from agentguard import trace as tracer
@@ -73,22 +73,12 @@ def run_scenario(
     run_id = f"poc_{label.replace(' ', '_').lower()}"
     auth_ctx = anonymous_context()
 
-    state = AgentGuardState(
+    state = make_initial_state(
         task=task,
         subject="PoC Run",
         root_task_id=run_id,
-        parent_node_id="root",
-        depth=0,
-        results={},
-        all_agents=[],
-        all_edges=[],
-        global_signal="",
-        usage_stats={"total_cost": 0.0},
-        budget_config=budget_override or {},
-        governance_decisions=[],
-        trace_events=[],
+        budget_config=budget_override,
         auth_context=auth_ctx.to_dict(),
-        parent_trace_event_id=None,
     )
 
     started_at = tracer._now_iso()
@@ -211,22 +201,11 @@ def run_poc():
     from agentguard.auth import anonymous_context as anon
     loop_memory = MemoryManager()
     loop_policy = PolicyEngine(loop_memory)
-    loop_state = AgentGuardState(
+    loop_state = make_initial_state(
         task="research task",
         subject="loop-test",
         root_task_id="poc_loop_test",
-        parent_node_id="root",
-        depth=0,
-        results={},
-        all_agents=[],
-        all_edges=[],
-        global_signal="OK",
-        usage_stats={"total_cost": 0.0},
-        budget_config={},
-        governance_decisions=[],
-        trace_events=[],
         auth_context=anon().to_dict(),
-        parent_trace_event_id=None,
     )
 
     for i in range(1, 4):
