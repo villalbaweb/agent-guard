@@ -25,6 +25,8 @@ Provider resolution order for get_embeddings():
 """
 import os
 import logging
+import hashlib
+import json
 from typing import Optional, Callable, Any
 from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -35,6 +37,25 @@ except ImportError:
     pass
 
 logger = logging.getLogger(__name__)
+
+_redis_client = None
+_redis_initialized = False
+
+def _get_redis():
+    global _redis_client, _redis_initialized
+    if not _redis_initialized:
+        _redis_initialized = True
+        try:
+            import redis as redis_lib
+            redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+            client = redis_lib.from_url(redis_url, decode_responses=True)
+            client.ping()
+            _redis_client = client
+        except Exception as e:
+            logger.debug(f"Redis cache not available for embeddings: {e}")
+            _redis_client = None
+    return _redis_client
+
 
 
 def get_llm() -> Optional[BaseChatModel]:
@@ -107,8 +128,10 @@ def get_embeddings() -> Optional[Callable[[list], Optional[list]]]:
     loop detection automatically.
     """
 
+    base_embed_fn = None
+
     # 1. OpenAI embeddings (primary — text-embedding-3-small is fast and cheap)
-    if os.environ.get("OPENAI_API_KEY"):
+    if os.environ.get("OPENAI_API_KEY") and base_embed_fn is None:
         try:
             from langchain_openai import OpenAIEmbeddings
             model = os.environ.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
@@ -127,12 +150,12 @@ def get_embeddings() -> Optional[Callable[[list], Optional[list]]]:
                     logger.error(f"OpenAI embeddings failed: {e}")
                     return None
 
-            return embed_openai
+            base_embed_fn = embed_openai
         except ImportError:
             logger.warning("langchain-openai not installed. Skipping OpenAI embeddings.")
 
     # 2. Google AI Studio embeddings (fallback — works with existing GOOGLE_API_KEY)
-    if os.environ.get("GOOGLE_API_KEY"):
+    if os.environ.get("GOOGLE_API_KEY") and base_embed_fn is None:
         try:
             from langchain_google_genai import GoogleGenerativeAIEmbeddings
             model = os.environ.get("GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-001")
@@ -149,15 +172,47 @@ def get_embeddings() -> Optional[Callable[[list], Optional[list]]]:
                     logger.error(f"Google embeddings failed: {e}")
                     return None
 
-            return embed_google
+            base_embed_fn = embed_google
         except ImportError:
             logger.warning("langchain-google-genai not installed. Skipping Google embeddings.")
 
-    logger.warning(
-        "No embeddings provider configured. "
-        "Semantic loop detection disabled — falling back to exact-match."
-    )
-    return None
+    if base_embed_fn is None:
+        logger.warning(
+            "No embeddings provider configured. "
+            "Semantic loop detection disabled — falling back to exact-match."
+        )
+        return None
+
+    def cached_embed_fn(texts: list) -> Optional[list]:
+        redis_client = _get_redis()
+        if not redis_client:
+            return base_embed_fn(texts)
+
+        results = [None] * len(texts)
+        uncached_indices = []
+        uncached_texts = []
+
+        for idx, text in enumerate(texts):
+            text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            cache_key = f"embedding:v1:{text_hash}"
+            cached_val = redis_client.get(cache_key)
+            if cached_val:
+                results[idx] = json.loads(cached_val)
+            else:
+                uncached_indices.append((idx, cache_key))
+                uncached_texts.append(text)
+
+        if uncached_texts:
+            new_embeddings = base_embed_fn(uncached_texts)
+            if new_embeddings is None:
+                return None  # Provider failed
+            for (idx, cache_key), emb in zip(uncached_indices, new_embeddings):
+                results[idx] = emb
+                redis_client.setex(cache_key, 2592000, json.dumps(emb))  # 30 days TTL
+
+        return results
+
+    return cached_embed_fn
 
 
 def normalize_llm_output(content: Any) -> str:
