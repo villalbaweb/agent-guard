@@ -74,6 +74,9 @@ PYTHONPATH=. uv run pytest                      # run the test suite
 1. **OpenAI** (`OPENAI_API_KEY`) — `text-embedding-3-small` (1536-dim), fast and cheap
 2. **Google AI Studio** (`GOOGLE_API_KEY`) — `models/gemini-embedding-001` (3072-dim)
 
+### 4.1 Caching Mechanism
+`get_embeddings()` utilizes a **Redis-backed embedding cache** which deduplicates identical texts, saving LLM API costs and significantly reducing latency for recursive or repetitive tasks. Uncached texts are batched to the provider, and their resultant embeddings are stored in Redis.
+
 ### Decision Log: Why not local sentence-transformers?
 A local Docker service using Hugging Face sentence-transformers was evaluated and built. It was rejected because:
 - Final image size was ~4 GB (PyTorch + CUDA libraries bundled even for CPU builds)

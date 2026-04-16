@@ -18,7 +18,7 @@
 
 | ID | Area | Description | Proposed Next Step |
 | :--- | :--- | :--- | :--- |
-| **U-08** | **Embedding Cache** | Every `check_step()` call embeds the current thought, including near-identical repeated calls. No caching of embedding vectors. | Cache embedding vectors by content hash in Redis. Significant cost/latency reduction for recursive runs where subtasks are similar. |
+| **U-08** | **Embedding Cache** | Every `check_step()` call embeds the current thought, including near-identical repeated calls. No caching of embedding vectors. | ✅ Resolved — Implemented a Redis-backed embedding cache to deduplicate and store identical text embeddings. Significant cost/latency reduction for recursive runs. |
 | **U-09** | **Registry Vector Search** | `Registry.search_by_intent()` uses substring matching. Intent routing accuracy degrades as the number of registered agents grows. | ✅ Resolved — Implemented via pgvector cosine similarity. `search_by_intent()` embeds the intent text and queries `agent_registry` using `vector <=> operator` with HNSW index. Falls back to substring matching when embeddings are unavailable. |
 | **U-10** | **Parallel Execution Safety** | `RecursiveExecutor` uses a serial `for` loop over subtasks. True parallelism with LangGraph `Send` is blocked by U-01 (no Redlock yet). | ✅ Resolved — Implemented via LangGraph `Send` API. `_edge_fan_out` dispatches one `Send` per subtask; `_node_worker` executes independently. Reducers in `AgentGuardState` handle merge. |
 
