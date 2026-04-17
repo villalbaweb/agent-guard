@@ -371,6 +371,7 @@ class RecursiveExecutor:
                 budget_config=state.get("budget_config", {}),
                 auth_context=state.get("auth_context", {}),
                 parent_trace_event_id=exec_event_id,
+                policy_id=state.get("policy_id"),
             )
             child_executor = RecursiveExecutor(
                 memory_manager=self.memory,

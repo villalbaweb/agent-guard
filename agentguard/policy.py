@@ -19,7 +19,7 @@ Loop detection is delegated to MemoryManager.
 import os
 import re
 import logging
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Any, Tuple, List, Optional
 
 try:
     import yaml
@@ -50,27 +50,37 @@ class PolicyEngine:
     def __init__(self, memory_manager: MemoryManager):
         self.memory = memory_manager
         self.llm = get_llm()
-        self._policy = self._load_policy()
-        self._compiled_rules = self._compile_rules(
-            self._policy.get("content_rules", [])
-        )
+        self._policies_cache: Dict[str, Tuple[Dict[str, Any], List[Dict[str, Any]]]] = {}
 
         if self.llm:
             logger.info(f"PolicyEngine: LLM guard active ({self.llm.__class__.__name__})")
         else:
             logger.info("PolicyEngine: no LLM configured — rule-based checks only.")
 
-        logger.info(
-            f"PolicyEngine: loaded {len(self._compiled_rules)} content rules, "
-            f"budget cap ${self._policy['budget']['max_cost_usd']:.2f}"
-        )
-
     # ------------------------------------------------------------------ #
-    #  Policy loading                                                      #
+    #  Policy discovery & loading                                          #
     # ------------------------------------------------------------------ #
 
-    def _load_policy(self) -> Dict[str, Any]:
-        policy_file = os.environ.get("POLICY_FILE", "policy.yaml")
+    def _get_policy(self, policy_id: Optional[str] = None) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """Resolves, loads, and caches a policy by ID."""
+        cache_key = policy_id or "__global__"
+        if cache_key in self._policies_cache:
+            return self._policies_cache[cache_key]
+
+        if not policy_id:
+            policy_file = os.environ.get("POLICY_FILE", "policy.yaml")
+        else:
+            # Prevent path traversal
+            safe_id = os.path.basename(policy_id)
+            policy_file = os.path.join("policies", f"{safe_id}.yaml")
+
+        policy_dict = self._load_policy_file(policy_file)
+        compiled_rules = self._compile_rules(policy_dict.get("content_rules", []))
+
+        self._policies_cache[cache_key] = (policy_dict, compiled_rules)
+        return policy_dict, compiled_rules
+
+    def _load_policy_file(self, policy_file: str) -> Dict[str, Any]:
         if not _YAML_AVAILABLE:
             logger.warning("pyyaml not installed — using default policy.")
             return _DEFAULT_POLICY
@@ -78,15 +88,15 @@ class PolicyEngine:
         try:
             with open(policy_file, encoding="utf-8") as f:
                 loaded = yaml.safe_load(f)
-            # Deep-merge with defaults so missing sections don't KeyError
             merged = dict(_DEFAULT_POLICY)
             merged.update(loaded or {})
-            logger.info(f"PolicyEngine: policy loaded from {policy_file}")
+            logger.info(f"PolicyEngine: loaded policy from {policy_file}")
             return merged
         except FileNotFoundError:
-            logger.warning(
-                f"PolicyEngine: {policy_file} not found — using built-in defaults."
-            )
+            logger.warning(f"PolicyEngine: {policy_file} not found — using built-in defaults.")
+            return _DEFAULT_POLICY
+        except Exception as e:
+            logger.error(f"PolicyEngine: error loading {policy_file}: {e}")
             return _DEFAULT_POLICY
 
     def _compile_rules(self, rules: List[Dict]) -> List[Dict]:
@@ -107,12 +117,19 @@ class PolicyEngine:
             compiled.append(entry)
         return compiled
 
+    def reload(self, policy_id: Optional[str] = None):
+        """Evicts a policy from the cache so it is reloaded on next use."""
+        cache_key = policy_id or "__global__"
+        if cache_key in self._policies_cache:
+            del self._policies_cache[cache_key]
+            logger.info(f"PolicyEngine: evicted '{cache_key}' from cache.")
+
     # ------------------------------------------------------------------ #
     #  Rule evaluation                                                     #
     # ------------------------------------------------------------------ #
 
     def _evaluate_rules(
-        self, action: str, intent: str
+        self, action: str, intent: str, compiled_rules: List[Dict]
     ) -> Tuple[bool, bool, str]:
         """
         Returns (allowed, hitl_required, reason).
@@ -120,7 +137,7 @@ class PolicyEngine:
         """
         fields = {"action": action, "intent": intent}
 
-        for rule in self._compiled_rules:
+        for rule in compiled_rules:
             field_value = fields.get(rule.get("field", "intent"), intent)
             operator = rule.get("operator")
             matched = False
@@ -179,8 +196,13 @@ class PolicyEngine:
         task = state.get("task", "")
         intent = task  # treat full task text as the intent for preflight
         subject = self._auth_subject(state)
+        policy_id = state.get("policy_id")
 
-        allowed, hitl, reason = self._evaluate_rules(action="start_task", intent=intent)
+        _, compiled_rules = self._get_policy(policy_id)
+
+        allowed, hitl, reason = self._evaluate_rules(
+            action="start_task", intent=intent, compiled_rules=compiled_rules
+        )
         if not allowed:
             return False, self._make_decision(
                 "start_task", False, reason, hitl_required=hitl, auth_subject=subject
@@ -198,7 +220,10 @@ class PolicyEngine:
         cost_estimate: float,
     ) -> Tuple[bool, GovernanceDecision]:
         """Validates an individual step (tool call, agent hand-off, recursion)."""
-        budget_cfg = self._policy["budget"]
+        policy_id = state.get("policy_id")
+        policy_dict, compiled_rules = self._get_policy(policy_id)
+        
+        budget_cfg = policy_dict["budget"]
         state_budget = state.get("budget_config", {})
         # State-level budget_config overrides policy.yaml (allows per-run limits)
         max_cost = state_budget.get("max_cost_usd") or budget_cfg.get("max_cost_usd", 10.0)
@@ -225,7 +250,9 @@ class PolicyEngine:
             )
 
         # 3. Content rules (regex + keyword)
-        allowed, hitl, reason = self._evaluate_rules(action=action, intent=intent)
+        allowed, hitl, reason = self._evaluate_rules(
+            action=action, intent=intent, compiled_rules=compiled_rules
+        )
         if not allowed:
             return False, self._make_decision(
                 action, False, reason, hitl_required=hitl, auth_subject=subject
@@ -233,6 +260,7 @@ class PolicyEngine:
 
         # 4. LLM semantic safety (optional — only runs if LLM is configured)
         if self.llm:
+            # (LLM prompt logic unchanged, but kept here for context)
             prompt = (
                 "You are a safety classifier for an enterprise AI governance system. "
                 "Evaluate whether this specific agent action represents a GENUINE safety violation.\n\n"
@@ -265,7 +293,7 @@ class PolicyEngine:
                 )
 
         # 5. Loop detection (delegates to MemoryManager)
-        loop_cfg = self._policy.get("loop_detection", {})
+        loop_cfg = policy_dict.get("loop_detection", {})
         if loop_cfg.get("enabled", True):
             thought = {"action": action, "intent": intent}
             if self.memory.detect_loop(

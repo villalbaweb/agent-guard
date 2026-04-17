@@ -84,6 +84,9 @@ Evaluation order for every `check_step()` call:
 Rule actions: `block` (hard deny), `allow` (explicit pass), `require_hitl` (pause for human approval).  
 Policy hot-reload: `POST /policy/reload` calls `PolicyEngine.reload()` without dropping in-flight runs.
 
+**Multi-Tenant Scoping (U-11):**
+`PolicyEngine` supports dynamic policy loading via `policy_id`. Policies are resolved from `policies/{policy_id}.yaml`. If no `policy_id` is provided, it falls back to the global `POLICY_FILE`. This enables per-tenant budget rules and content filters on a single deployment.
+
 ---
 
 ### `agentguard/memory.py` — Shared Epistemic Memory

@@ -79,6 +79,7 @@ def _execute_run(
             root_task_id=run_id,
             budget_config=body.budget_override,
             auth_context=auth.to_dict(),
+            policy_id=body.policy_id,
         )
 
         graph = executor.build_graph()

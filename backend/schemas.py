@@ -19,6 +19,7 @@ class RunCreateRequest(BaseModel):
         None, description="Per-run budget overrides, e.g. {\"max_cost_usd\": 1.0}."
     )
     max_depth: int = Field(3, ge=1, le=10, description="Maximum recursion depth.")
+    policy_id: Optional[str] = Field(None, description="The distinct policy ID/tenant to apply to this run.")
 
 
 class RunCreateResponse(BaseModel):
