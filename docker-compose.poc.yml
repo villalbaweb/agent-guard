@@ -13,6 +13,46 @@ services:
       timeout: 3s
       retries: 5
 
+  # --- PostgreSQL + pgvector — agent registry (U-09/U-12) ---
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agentguard_postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agent_db}
+      POSTGRES_USER: ${POSTGRES_USER:-agent_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_user} -d ${POSTGRES_DB:-agent_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- DbGate — PostgreSQL management UI (http://localhost:3001) ---
+  dbgate:
+    image: dbgate/dbgate:latest
+    container_name: agentguard_dbgate
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      CONNECTIONS: postgres
+      LABEL_postgres: Agent Database
+      SERVER_postgres: postgres
+      USER_postgres: ${POSTGRES_USER:-agent_user}
+      PASSWORD_postgres: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      PORT_postgres: 5432
+      DATABASE_postgres: ${POSTGRES_DB:-agent_db}
+      ENGINE_postgres: postgres@dbgate-plugin-postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # --- AgentGuard REST API (Step B) ---
   backend:
     build:
@@ -25,8 +65,11 @@ services:
     env_file: .env
     environment:
       REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agent_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-agent_db}
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -38,3 +81,6 @@ services:
 networks:
   default:
     name: agentguard_poc_network
+
+volumes:
+  postgres_data:

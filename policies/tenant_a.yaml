@@ -1,0 +1,8 @@
+content_rules:
+- action: block
+  field: intent
+  id: block_crypto
+  operator: contains
+  reason: No crypto.
+  values:
+  - crypto

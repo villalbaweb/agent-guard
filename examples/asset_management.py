@@ -59,6 +59,7 @@ except ImportError:
 
 from agentguard import (
     AgentGuardState,
+    make_initial_state,
     MemoryManager,
     Registry,
     RecursiveExecutor,
@@ -180,22 +181,14 @@ def run_scenario(
     run_id = f"meridian_{label.replace(' ', '_').replace('(', '').replace(')', '').lower()}"
     auth_ctx = auth_context or anonymous_context()
 
-    state = AgentGuardState(
+    state = make_initial_state(
         task=task,
         subject=auth_ctx.subject,
         root_task_id=run_id,
-        parent_node_id="root",
-        depth=0,
-        results={},
-        all_agents=[],
-        all_edges=[],
-        global_signal="",
-        usage_stats={"total_cost": 0.0},
-        budget_config=budget_override or {},
-        governance_decisions=[],
-        trace_events=[],
+        budget_config=budget_override,
         auth_context=auth_ctx.to_dict(),
-        parent_trace_event_id=None,
+        depth=0,
+        parent_node_id="root",
     )
 
     started_at = tracer._now_iso()
@@ -283,22 +276,12 @@ def run_budget_cap_scenario(memory: MemoryManager):
         ttl_seconds=3600,
     )
 
-    state = AgentGuardState(
+    state = make_initial_state(
         task="Analyze NVDA Q3 earnings and update price target",
         subject=junior_ctx.subject,
         root_task_id="meridian_junior_budget_test",
-        parent_node_id="root",
-        depth=0,
-        results={},
-        all_agents=[],
-        all_edges=[],
-        global_signal="OK",
-        usage_stats={"total_cost": 0.0},
         budget_config={"max_cost_usd": 0.08, "per_step_limit_usd": 0.10},
-        governance_decisions=[],
-        trace_events=[],
         auth_context=junior_ctx.to_dict(),
-        parent_trace_event_id=None,
     )
 
     steps = [
@@ -339,22 +322,11 @@ def run_loop_detection_scenario(memory: MemoryManager):
     loop_memory = MemoryManager()
     policy = PolicyEngine(loop_memory)
 
-    loop_state = AgentGuardState(
+    loop_state = make_initial_state(
         task="Continuously refresh AAPL intraday data",
         subject="system-auto-refresh",
         root_task_id="meridian_loop_detection_test",
-        parent_node_id="root",
-        depth=0,
-        results={},
-        all_agents=[],
-        all_edges=[],
-        global_signal="OK",
-        usage_stats={"total_cost": 0.0},
-        budget_config={},
-        governance_decisions=[],
-        trace_events=[],
         auth_context=anonymous_context().to_dict(),
-        parent_trace_event_id=None,
     )
 
     # Same intent repeated 4 times — simulates a stuck retry loop

@@ -30,21 +30,22 @@ def _get_engine():
 
 @router.get("", response_model=PolicyResponse, summary="Return loaded policy")
 def get_policy(auth: Annotated[AuthContext, Depends(require_auth)]) -> PolicyResponse:
-    """Return the currently active policy rules."""
+    """Return the currently active global policy rules."""
     engine = _get_engine()
+    policy_dict, _ = engine._get_policy()  # gets global policy
     return PolicyResponse(
         policy_version="1.0",
-        content=engine._policy,
+        content=policy_dict,
     )
 
 
 @router.post("/reload", response_model=PolicyReloadResponse, summary="Hot-reload policy file")
 def reload_policy(auth: Annotated[AuthContext, Depends(require_auth)]) -> PolicyReloadResponse:
-    """Reload policy.yaml from disk without restarting the server.
+    """Reload the global policy.yaml from disk without restarting the server.
 
     Returns 409 if a reload is already in progress.
     """
-    global _policy_engine, _reload_lock
+    global _reload_lock
     if _reload_lock:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -52,11 +53,11 @@ def reload_policy(auth: Annotated[AuthContext, Depends(require_auth)]) -> Policy
         )
     _reload_lock = True
     try:
-        from agentguard.memory import MemoryManager
-        from agentguard.policy import PolicyEngine
-        _policy_engine = PolicyEngine(MemoryManager())
-        rules_count = len(_policy_engine._compiled_rules)
-        logger.info(f"Policy reloaded by {auth.subject} — {rules_count} rules active.")
+        engine = _get_engine()
+        engine.reload()  # Evicts global policy from cache
+        policy_dict, compiled_rules = engine._get_policy() # Re-loads from disk
+        rules_count = len(compiled_rules)
+        logger.info(f"Global policy reloaded by {auth.subject} — {rules_count} rules active.")
         return PolicyReloadResponse(
             reloaded=True,
             policy_version="1.0",

@@ -1,7 +1,7 @@
 # AgentGuard — Architecture Reference
 
-> Current MVP state: **Milestone 5 complete.** All core components implemented and tested.  
-> Next milestone: Parallel execution via `Send` + vector registry (see `unknown_items.md`).
+> Current MVP state: **Milestone 6 complete.** All core components, parallel execution, and vector registry implemented and tested.
+> Next milestone: SDK packaging and API enhancements (see `unknown_items.md`).
 
 ---
 
@@ -24,8 +24,8 @@ User / REST Client
    └────────────────────────────────────────────────────┘
         │                    │
         ▼                    ▼
-   MemoryManager         LLM Provider
-   (Redis / in-mem)      (Gemini / Claude / OpenAI)
+   MemoryManager         LLM Provider              DatabaseManager
+   (Redis / in-mem)      (Gemini / Claude / etc)   (PostgreSQL / pgvector)
 ```
 
 ### LangGraph Graph Nodes
@@ -84,6 +84,9 @@ Evaluation order for every `check_step()` call:
 Rule actions: `block` (hard deny), `allow` (explicit pass), `require_hitl` (pause for human approval).  
 Policy hot-reload: `POST /policy/reload` calls `PolicyEngine.reload()` without dropping in-flight runs.
 
+**Multi-Tenant Scoping (U-11):**
+`PolicyEngine` supports dynamic policy loading via `policy_id`. Policies are resolved from `policies/{policy_id}.yaml`. If no `policy_id` is provided, it falls back to the global `POLICY_FILE`. This enables per-tenant budget rules and content filters on a single deployment.
+
 ---
 
 ### `agentguard/memory.py` — Shared Epistemic Memory
@@ -141,8 +144,7 @@ class AuthContext:
 Central "Yellow Pages" mapping agent IDs to metadata (role, semantic description, I/O schemas).  
 `ExecutionPlanner` uses `search_by_intent()` to route subtasks to agents.
 
-**Current:** In-memory, substring-match routing. Accurate for 2–5 agents.  
-**Planned (U-09):** Redis-backed + vector similarity search for production scale.
+**Current:** PostgreSQL-backed + pgvector similarity search for production scale (U-09). Supports dynamic self-registration via REST API and background health monitoring (U-12). Accurate for 1000+ agents. Falls back seamlessly to in-memory substring-match routing when PostgreSQL is unavailable.
 
 ---
 
@@ -151,13 +153,19 @@ Thin FastAPI facade over `agentguard/`. All orchestration logic stays in the cor
 
 | Method | Path | Auth | Description |
 |:-------|:-----|:-----|:------------|
-| `GET` | `/health` | None | Redis + LLM liveness probe |
+| `GET` | `/health` | None | Redis + Postgres + LLM liveness probe |
 | `POST` | `/runs` | Bearer / API key | Submit task (background); returns `run_id` |
 | `GET` | `/runs/{id}` | Bearer / API key | Status, `final_answer`, cost, governance summary |
 | `GET` | `/runs/{id}/trace` | Bearer / API key | Full trace JSON |
 | `POST` | `/runs/{id}/approve` | Bearer + `approver` role | Approve/reject HITL-pending step |
 | `GET` | `/policy` | Bearer / API key | Return active policy rules |
 | `POST` | `/policy/reload` | Bearer / API key | Hot-reload policy without restart |
+| `POST` | `/agents/register` | Bearer / API key | Register or update an agent (upsert) |
+| `GET` | `/agents` | Bearer / API key | List all active agents |
+| `GET` | `/agents/{id}` | Bearer / API key | Get a single agent by ID |
+| `DELETE` | `/agents/{id}` | Bearer / API key | Soft-deactivate an agent |
+| `POST` | `/agents/{id}/activate` | Bearer / API key | Re-activate a deactivated agent |
+| `POST` | `/agents/search` | Bearer / API key | Search agents by natural-language intent |
 
 Run state machine: `queued → running → {completed | blocked | hitl_pending | error}`  
 HITL resumes via `POST /approve` with an `approver`-role JWT.
@@ -197,7 +205,6 @@ See `unknown_items.md` for the full open-items register. Key items:
 
 | Item | Blocker |
 |:-----|:--------|
-| Vector similarity routing in Registry | Redis VSS migration (U-09) |
 | RS256 / JWKS JWT verification | Production identity provider integration |
 | Multi-tenant policy scoping | Per-request `policy_id` resolution (U-11) |
 | MCP proxy integration | MCP framework selection (U-03) |

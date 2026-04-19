@@ -1,0 +1,8 @@
+content_rules:
+- action: block
+  field: intent
+  id: block_politics
+  operator: contains
+  reason: No politics.
+  values:
+  - politics

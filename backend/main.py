@@ -19,7 +19,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .routes import health, policy, runs
+import asyncio
+from .routes import health, policy, runs, agents as agents_router
 from .schemas import ErrorResponse, ErrorDetail
 
 try:
@@ -38,7 +39,18 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("AgentGuard API starting up...")
+    # Optional background agent health checker (U-09/U-12)
+    health_task = None
+    try:
+        from agentguard.health_checker import AgentHealthChecker
+        from .dependencies import get_registry
+        health_task = asyncio.create_task(AgentHealthChecker(get_registry()).run())
+        logger.info("AgentGuard: health checker started.")
+    except Exception as exc:
+        logger.warning(f"AgentGuard: health checker could not start ({exc}).")
     yield
+    if health_task is not None:
+        health_task.cancel()
     logger.info("AgentGuard API shutting down.")
 
 
@@ -91,3 +103,4 @@ async def global_exception_handler(request: Request, exc: Exception):
 app.include_router(health.router)
 app.include_router(runs.router)
 app.include_router(policy.router)
+app.include_router(agents_router.router)

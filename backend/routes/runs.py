@@ -13,7 +13,7 @@ from typing import Annotated, Dict, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
-from agentguard.state import AgentGuardState
+from agentguard.state import AgentGuardState, make_initial_state
 from agentguard.executor import RecursiveExecutor
 from agentguard.auth import AuthContext
 from agentguard import trace as tracer
@@ -73,22 +73,13 @@ def _execute_run(
     """Background task: build graph, invoke, persist state + trace."""
     started_at = tracer._now_iso()
     try:
-        initial_state = AgentGuardState(
+        initial_state = make_initial_state(
             task=body.task,
             subject=auth.subject,
             root_task_id=run_id,
-            parent_node_id="root",
-            depth=0,
-            results={},
-            all_agents=[],
-            all_edges=[],
-            global_signal="",
-            usage_stats={"total_cost": 0.0},
-            budget_config=body.budget_override or {},
-            governance_decisions=[],
-            trace_events=[],
+            budget_config=body.budget_override,
             auth_context=auth.to_dict(),
-            parent_trace_event_id=None,
+            policy_id=body.policy_id,
         )
 
         graph = executor.build_graph()
