@@ -147,21 +147,22 @@ def require_auth(
     # JWT bearer token
     if authorization and authorization.startswith("Bearer "):
         token = authorization.removeprefix("Bearer ").strip()
-        try:
-            ctx = decode_token(token)
-        except ValueError as e:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=str(e),
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        if ctx.is_expired():
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="JWT has expired.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return ctx
+        if token:  # skip if token is empty (e.g. frontend sends "Bearer " with no value)
+            try:
+                ctx = decode_token(token)
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=str(e),
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            if ctx.is_expired():
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="JWT has expired.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return ctx
 
     # No credential provided — check if auth is disabled for development
     if os.environ.get("AGENTGUARD_NO_AUTH", "").lower() in ("1", "true", "yes"):

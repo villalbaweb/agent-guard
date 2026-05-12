@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  # --- Redis — shared state, blueprint cache, loop-detection history ---
+  redis:
+    image: redis:7-alpine
+    container_name: agentguard_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # --- PostgreSQL + pgvector — agent registry ---
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agentguard_postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agent_db}
+      POSTGRES_USER: ${POSTGRES_USER:-agent_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-agent_user} -d $${POSTGRES_DB:-agent_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- AgentGuard REST API (Backend) ---
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: agentguard_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql://$${POSTGRES_USER:-agent_user}:$${POSTGRES_PASSWORD}@postgres:5432/$${POSTGRES_DB:-agent_db}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  # --- AgentGuard Trace Viewer (Frontend) ---
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=http://localhost:8000
+    container_name: agentguard_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+  # --- DbGate — PostgreSQL management UI (http://localhost:3001) ---
+  dbgate:
+    image: dbgate/dbgate:latest
+    container_name: agentguard_dbgate
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      CONNECTIONS: postgres
+      LABEL_postgres: Agent Database
+      SERVER_postgres: postgres
+      USER_postgres: ${POSTGRES_USER:-agent_user}
+      PASSWORD_postgres: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      PORT_postgres: 5432
+      DATABASE_postgres: ${POSTGRES_DB:-agent_db}
+      ENGINE_postgres: postgres@dbgate-plugin-postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
