@@ -7,4 +7,4 @@ __pycache__/
 # Traces — exclude JSON outputs but keep directory structure in Git
 /traces/**/*.json
 /traces/*.json
-node_modules/
+**/node_modules/
