@@ -37,6 +37,8 @@ class RecursiveExecutor:
         registry: Registry,
         max_depth: int = 3,
         checkpointer=None,
+        enable_reflection: bool = False,
+        max_reflections: int = 1,
     ):
         self.memory = memory_manager
         self.registry = registry
@@ -44,6 +46,8 @@ class RecursiveExecutor:
         self.planner = ExecutionPlanner(registry)
         self.max_depth = max_depth
         self.checkpointer = checkpointer  # optional langgraph checkpointer for HITL
+        self.enable_reflection = enable_reflection
+        self.max_reflections = max_reflections
 
     def build_graph(self):
         graph = StateGraph(AgentGuardState)
@@ -66,8 +70,18 @@ class RecursiveExecutor:
         graph.add_conditional_edges("plan", self._edge_fan_out)
         graph.add_edge("worker", "synthesize")
         graph.add_edge("collect_max_depth", "synthesize")
-        graph.add_edge("synthesize", END)
         graph.add_edge("reject", END)
+
+        if self.enable_reflection:
+            graph.add_node("reflect", self._node_reflect)
+            graph.add_edge("synthesize", "reflect")
+            graph.add_conditional_edges(
+                "reflect",
+                self._edge_post_reflect,
+                {"done": END, "replan": "decompose"},
+            )
+        else:
+            graph.add_edge("synthesize", END)
 
         compile_kwargs: Dict[str, Any] = {}
         if self.checkpointer is not None:
@@ -302,6 +316,40 @@ class RecursiveExecutor:
         global_signal = "OK"
 
         if not allowed:
+            # F-02: try an alternative agent before hard-blocking
+            if not decision.get("hitl_required"):
+                alt = self._find_alternative_agent(agent_id, clean_intent)
+                if alt:
+                    alt_id = alt.get("id") or alt.get("item_id", "")
+                    alt_role = alt.get("role", alt_id)
+                    alt_action = f"invoke_{alt_id}"
+                    logger.info(f"Executor: [REPLAN] {agent_id} blocked — retrying with {alt_id}")
+                    replan_ev = trace.new_event(
+                        run_id=run_id, node="worker", depth=current_depth,
+                        parent_event_id=exec_event_id,
+                        action="dynamic_replan",
+                        intent=f"Replanning: replacing {agent_id} with {alt_id}",
+                        status="ok",
+                        metadata={"blocked_agent": agent_id, "alternative_agent": alt_id},
+                    )
+                    worker_trace_events.append(replan_ev)
+                    alt_allowed, alt_decision = self.policy.check_step(
+                        state, action=alt_action,
+                        intent=f"{alt_role} performing: {subtask}",
+                        cost_estimate=cost_estimate,
+                    )
+                    worker_decisions.append(alt_decision)
+                    if alt_allowed:
+                        usage["total_cost"] = cost_estimate
+                        result_key = f"{alt_id}:{subtask_hash}"
+                        return {
+                            "results": {result_key: f"[{alt_role}] Completed via replan: {subtask}"},
+                            "usage_stats": usage,
+                            "governance_decisions": worker_decisions,
+                            "trace_events": worker_trace_events,
+                            "global_signal": "OK",
+                        }
+
             if decision.get("hitl_required"):
                 hitl_payload = {
                     "event_id": ev["event_id"],
@@ -453,3 +501,101 @@ class RecursiveExecutor:
             status="blocked",
         )
         return {"global_signal": "REJECTED_BY_POLICY", "trace_events": [ev]}
+
+    # ------------------------------------------------------------------ #
+    #  F-01 — Reflection / Self-Critique loop                              #
+    # ------------------------------------------------------------------ #
+
+    def _node_reflect(self, state: AgentGuardState, config: RunnableConfig) -> Dict[str, Any]:
+        """Critique the synthesized answer against the original task.
+
+        If the LLM identifies a clear failure and reflection budget allows,
+        sets reflection_count+=1 and clears results so the planner can retry.
+        Otherwise passes through unchanged.
+
+        Every reflection emits a trace event so the self-critique is visible
+        in the causal graph — the core learning objective of this pattern.
+        """
+        from .llm import get_llm, normalize_llm_output
+
+        run_id = state.get("root_task_id", "unknown")
+        depth = state.get("depth", 0)
+        trace_events = state.get("trace_events", [])
+        parent_event_id = trace_events[-1]["event_id"] if trace_events else None
+        reflection_count = state.get("reflection_count", 0)
+        task = state.get("task", "")
+        answer = state.get("results", {}).get("final_answer", "")
+
+        needs_replan = False
+        critique = "Reflection skipped (no LLM available)."
+
+        llm = get_llm()
+        if llm and answer and reflection_count < self.max_reflections:
+            prompt = (
+                "You are a quality reviewer for an AI agent system.\n\n"
+                f"Original task: {task}\n\n"
+                f"Agent answer: {answer}\n\n"
+                "Does this answer adequately address the task? "
+                "Reply with exactly one word: ADEQUATE or INADEQUATE."
+            )
+            try:
+                result = llm.invoke(prompt)
+                verdict = normalize_llm_output(result.content).strip().upper()
+                critique = f"Reflection verdict: {verdict}"
+                needs_replan = "INADEQUATE" in verdict
+                logger.info(f"Executor: [REFLECT] {critique}")
+            except Exception as e:
+                logger.warning(f"Executor: reflection LLM call failed ({e}) — skipping replan.")
+
+        ev = trace.new_event(
+            run_id=run_id, node="reflect", depth=depth,
+            parent_event_id=parent_event_id,
+            action="self_critique",
+            status="ok",
+            metadata={
+                "reflection_count": reflection_count,
+                "needs_replan": needs_replan,
+                "critique": critique,
+            },
+        )
+
+        if needs_replan:
+            logger.info(f"Executor: [REFLECT] triggering replan (reflection {reflection_count + 1}/{self.max_reflections})")
+            return {
+                "reflection_count": reflection_count + 1,
+                "results": {},
+                "all_edges": [],
+                "trace_events": [ev],
+            }
+
+        return {"trace_events": [ev]}
+
+    def _edge_post_reflect(self, state: AgentGuardState) -> str:
+        """Route to decompose (replan) or END based on what reflect node decided.
+
+        The reflect node signals a replan by clearing state.results and
+        incrementing reflection_count.  We detect that here by checking whether
+        results is now empty (cleared by the node on INADEQUATE verdict).
+        """
+        if state.get("reflection_count", 0) > 0 and not state.get("results", {}).get("final_answer"):
+            return "replan"
+        return "done"
+
+    # ------------------------------------------------------------------ #
+    #  F-02 — Dynamic replanning helpers (used inside _node_worker)        #
+    # ------------------------------------------------------------------ #
+
+    def _find_alternative_agent(self, blocked_agent_id: str, intent: str) -> Optional[Dict[str, Any]]:
+        """Search the registry for an alternative agent when one is blocked.
+
+        Returns an agent dict or None if no alternative is found.
+        """
+        try:
+            candidates = self.registry.search_by_intent(intent, limit=5)
+            for candidate in candidates:
+                cid = candidate.get("id") or candidate.get("item_id", "")
+                if cid and cid != blocked_agent_id:
+                    return candidate
+        except Exception as e:
+            logger.warning(f"Executor: alternative agent search failed ({e}).")
+        return None

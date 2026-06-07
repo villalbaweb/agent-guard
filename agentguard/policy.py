@@ -47,10 +47,18 @@ _DEFAULT_POLICY = {
 
 
 class PolicyEngine:
+    # D-03: circuit breaker thresholds
+    _LLM_FAIL_RULES_ONLY_AFTER = 3   # consecutive LLM failures → rules-only mode
+    _TOTAL_FAIL_FULL_BLOCK_AFTER = 6  # total failures in rules-only → full block mode
+
     def __init__(self, memory_manager: MemoryManager):
         self.memory = memory_manager
         self.llm = get_llm()
         self._policies_cache: Dict[str, Tuple[Dict[str, Any], List[Dict[str, Any]]]] = {}
+        # D-03: circuit breaker state
+        self._llm_consecutive_failures: int = 0
+        self._rules_only_mode: bool = False
+        self._full_block_mode: bool = False
 
         if self.llm:
             logger.info(f"PolicyEngine: LLM guard active ({self.llm.__class__.__name__})")
@@ -258,15 +266,22 @@ class PolicyEngine:
                 action, False, reason, hitl_required=hitl, auth_subject=subject
             )
 
-        # 4. LLM semantic safety (optional — only runs if LLM is configured)
-        if self.llm:
-            # (LLM prompt logic unchanged, but kept here for context)
+        # 4. LLM semantic safety — with D-03 circuit breaker
+        if self._full_block_mode:
+            return False, self._make_decision(
+                action, False,
+                "Governance circuit breaker open: both LLM guard and fallback failed repeatedly. "
+                "Blocking all steps until the guard recovers.",
+                auth_subject=subject,
+            )
+
+        if self.llm and not self._rules_only_mode:
             prompt = (
-                "You are a safety classifier for an enterprise AI governance system. "
+                "You are a safety classifier for an AI governance research system. "
                 "Evaluate whether this specific agent action represents a GENUINE safety violation.\n\n"
                 "ALLOW if the action is: internal task execution, web search, data analysis, "
                 "summarization, research, code generation for legitimate purposes, or any standard "
-                "business operation — even if the topic sounds complex or sensitive.\n\n"
+                "operation — even if the topic sounds complex or sensitive.\n\n"
                 "BLOCK only if the action clearly involves: actual system exploitation, "
                 "exfiltrating real PII/credentials, generating malware, financial fraud, "
                 "or causing direct harm. Task names and research topics alone do NOT constitute violations.\n\n"
@@ -276,21 +291,30 @@ class PolicyEngine:
             try:
                 result = self.llm.invoke(prompt)
                 verdict = normalize_llm_output(result.content).strip().upper()
+                self._llm_consecutive_failures = 0  # reset on success
                 if "BLOCK" in verdict:
                     return False, self._make_decision(
-                        action,
-                        False,
+                        action, False,
                         "LLM semantic guard: safety violation detected.",
                         auth_subject=subject,
                     )
             except Exception as e:
+                self._llm_consecutive_failures += 1
                 logger.error(
-                    f"LLM policy check failed: {e}. Failing closed for safety."
+                    f"LLM policy check failed ({self._llm_consecutive_failures}x): {e}."
                 )
+                if self._llm_consecutive_failures >= self._LLM_FAIL_RULES_ONLY_AFTER:
+                    self._rules_only_mode = True
+                    logger.warning(
+                        "PolicyEngine: circuit breaker — switching to rules-only mode "
+                        f"after {self._llm_consecutive_failures} consecutive LLM failures."
+                    )
                 return False, self._make_decision(
-                    action, False, "Safety check service unavailable — failing closed.",
+                    action, False, "LLM safety check unavailable — failing closed.",
                     auth_subject=subject,
                 )
+        elif self._rules_only_mode:
+            logger.debug("PolicyEngine: rules-only mode active (LLM guard bypassed).")
 
         # 5. Loop detection (delegates to MemoryManager)
         loop_cfg = policy_dict.get("loop_detection", {})

@@ -20,6 +20,13 @@ class RunCreateRequest(BaseModel):
     )
     max_depth: int = Field(3, ge=1, le=10, description="Maximum recursion depth.")
     policy_id: Optional[str] = Field(None, description="The distinct policy ID/tenant to apply to this run.")
+    callback_url: Optional[str] = Field(
+        None,
+        description=(
+            "D-02: Optional webhook URL. On run completion/block/error, AgentGuard POSTs "
+            "the RunStatusResponse payload here. Demonstrates the async long-running-job pattern."
+        ),
+    )
 
 
 class RunCreateResponse(BaseModel):

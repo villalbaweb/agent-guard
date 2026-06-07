@@ -14,6 +14,19 @@ export interface TraceEvent {
   cumulative_cost: number;
   status: string;
   metadata: any;
+  llm_token_counts: Record<string, number> | null;
+  latency_breakdown: Record<string, number> | null;
+}
+
+export interface PolicyResponse {
+  policy_version: string;
+  content: Record<string, any>;
+}
+
+export interface PolicyReloadResponse {
+  reloaded: boolean;
+  policy_version: string;
+  rules_count: number;
 }
 
 export interface TraceResponse {

@@ -1,7 +1,18 @@
 [project]
-name = "agent-guard"
-version = "0.1.0"
-description = "A policy-driven agentic operating system."
+name = "agentguard"
+version = "0.2.0"
+description = "A research testbed for governed, recursive multi-agent systems."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Daniel Villalba", email = "villalbaweb@gmail.com" }]
+keywords = ["llm", "agents", "governance", "policy", "langgraph", "safety"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+]
 dependencies = [
     "langchain>=0.3.0",
     "langchain-anthropic",
@@ -26,14 +37,24 @@ dependencies = [
 ]
 requires-python = ">=3.13"
 
+
+[project.scripts]
+agentguard-eval = "scripts.run_eval:main"
+
+[project.urls]
+Repository = "https://github.com/villalbaweb/agent-guard"
+
 [project.optional-dependencies]
-# Redis-backed LangGraph checkpointer for durable HITL pause/resume (Step C)
 hitl-redis = [
     "langgraph-checkpoint-redis>=0.0.1",
 ]
+mcp = []
+
+[tool.setuptools.packages.find]
+include = ["agentguard*"]
 
 [tool.uv]
-package = false
+package = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

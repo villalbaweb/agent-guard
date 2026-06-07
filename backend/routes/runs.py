@@ -9,9 +9,9 @@ POST   /runs/{id}/approve — approve a HITL_PENDING step; resumes the graph (St
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated, Dict, Any
+from typing import Annotated, Dict, Any, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 
 from agentguard.state import AgentGuardState, make_initial_state
 from agentguard.executor import RecursiveExecutor
@@ -135,9 +135,15 @@ def _execute_run(
         )
         logger.info(f"Run {run_id} finished: {final_status}")
 
+        # D-02: fire webhook if caller supplied a callback_url
+        if body.callback_url:
+            _fire_webhook(run_id, body.callback_url, store)
+
     except Exception as exc:
         logger.exception(f"Run {run_id} failed with error: {exc}")
         store.set_status(run_id, "error", error=str(exc))
+        if body.callback_url:
+            _fire_webhook(run_id, body.callback_url, store)
 
 
 # --------------------------------------------------------------------------- #
@@ -174,15 +180,75 @@ def get_trace(
     run_id: str,
     auth: Annotated[AuthContext, Depends(require_auth)],
     store: Annotated[RunStore, Depends(get_run_store)],
-) -> Dict[str, Any]:
-    """Download the full causal dependency graph JSON for a completed run."""
+    format: Optional[str] = Query(None, description="Output format: omit for JSON, 'mermaid' for a Mermaid diagram."),
+):
+    """Download the full causal dependency graph for a completed run.
+
+    Pass ?format=mermaid to get a Mermaid flowchart suitable for pasting into
+    docs or notebooks instead of the raw JSON.
+    """
     trace_doc = store.load_trace(run_id)
     if not trace_doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Trace for run '{run_id}' not found. The run may still be in progress.",
         )
+    if format == "mermaid":
+        return Response(content=_trace_to_mermaid(trace_doc), media_type="text/plain")
     return trace_doc
+
+
+def _fire_webhook(run_id: str, callback_url: str, store) -> None:
+    """POST the run status payload to the caller's callback_url (D-02).
+
+    Runs in the same background thread as _execute_run — no queue needed for
+    a playground.  A production implementation would use a worker queue or
+    asyncio to avoid blocking the background thread on the HTTP call.
+    """
+    import urllib.request, urllib.error, json as _json
+    try:
+        record = store.get_status(run_id) or {}
+        payload = _json.dumps({
+            "run_id": run_id,
+            "status": record.get("status", "unknown"),
+            "final_answer": record.get("final_answer"),
+            "total_cost_usd": record.get("total_cost_usd", 0.0),
+            "decisions_summary": record.get("decisions_summary", {}),
+            "trace_url": f"/runs/{run_id}/trace",
+        }).encode()
+        req = urllib.request.Request(
+            callback_url,
+            data=payload,
+            headers={"Content-Type": "application/json", "X-AgentGuard-RunId": run_id},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            logger.info(f"Webhook delivered for run {run_id}: HTTP {resp.status}")
+    except Exception as exc:
+        logger.warning(f"Webhook delivery failed for run {run_id}: {exc}")
+
+
+def _trace_to_mermaid(trace_doc: Dict[str, Any]) -> str:
+    """Convert a trace JSON document to a Mermaid flowchart diagram."""
+    lines: List[str] = ["flowchart TD"]
+    events: Dict[str, Any] = {e["event_id"]: e for e in trace_doc.get("events", [])}
+
+    for ev in events.values():
+        safe_id = ev["event_id"].replace("-", "_")
+        label = ev["node"]
+        if ev.get("agent_id"):
+            label += f"\\n{ev['agent_id']}"
+        label += f"\\n[{ev.get('status', 'ok')}]"
+        if ev.get("cost_delta", 0.0) > 0:
+            label += f"\\n${ev['cost_delta']:.4f}"
+        lines.append(f'    {safe_id}["{label}"]')
+
+    for edge in trace_doc.get("edges", []):
+        src = edge["from"].replace("-", "_")
+        tgt = edge["to"].replace("-", "_")
+        lines.append(f"    {src} --> {tgt}")
+
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #

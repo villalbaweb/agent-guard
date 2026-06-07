@@ -7,9 +7,9 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "agent-guard"
-version = "0.1.0"
-source = { virtual = "." }
+name = "agentguard"
+version = "0.2.0"
+source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
@@ -62,7 +62,7 @@ requires-dist = [
     { name = "redis", specifier = ">=5.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32.0" },
 ]
-provides-extras = ["hitl-redis"]
+provides-extras = ["hitl-redis", "mcp"]
 
 [package.metadata.requires-dev]
 dev = [

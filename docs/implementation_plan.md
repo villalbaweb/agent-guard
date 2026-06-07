@@ -1,7 +1,7 @@
 # AgentGuard — Architecture Reference
 
-> Current MVP state: **Milestone 6 complete.** All core components, parallel execution, and vector registry implemented and tested.
-> Next milestone: SDK packaging and API enhancements (see `unknown_items.md`).
+> Current state: **Milestone 6 complete.** All core components, parallel execution, and vector registry implemented and tested.
+> Next: frontier agentic experiments (see research backlog in `unknown_items.md`).
 
 ---
 

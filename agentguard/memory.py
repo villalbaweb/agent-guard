@@ -101,11 +101,42 @@ class MemoryManager:
     #  Thought history (loop detection feed)                               #
     # ------------------------------------------------------------------ #
 
+    # ------------------------------------------------------------------ #
+    #  D-01 — Distributed lock (Redlock-style via Redis SETNX)            #
+    # ------------------------------------------------------------------ #
+
+    def _acquire_lock(self, lock_key: str, ttl_seconds: int = 5) -> bool:
+        """Try to acquire a Redis SETNX lock.  Returns True on success.
+
+        Falls back to True for in-memory mode (single-process, no contention).
+        Demonstrates the Redlock pattern: use before any read-modify-write
+        cycle on shared state to prevent lost-update races under parallel Send.
+        """
+        if not self._redis:
+            return True
+        import time
+        deadline = time.monotonic() + ttl_seconds
+        while time.monotonic() < deadline:
+            if self._redis.set(lock_key, "1", nx=True, ex=ttl_seconds):
+                return True
+            time.sleep(0.01)
+        logger.warning(f"MemoryManager: could not acquire lock '{lock_key}' within {ttl_seconds}s.")
+        return False
+
+    def _release_lock(self, lock_key: str):
+        if self._redis:
+            self._redis.delete(lock_key)
+
     def record_thought(self, run_id: str, thought: Dict[str, Any]):
         key = self._key_history(run_id)
-        history = self._get(key) or []
-        history.append(thought)
-        self._set(key, history)
+        lock_key = f"lock:{key}"
+        self._acquire_lock(lock_key)
+        try:
+            history = self._get(key) or []
+            history.append(thought)
+            self._set(key, history)
+        finally:
+            self._release_lock(lock_key)
 
     def get_history(self, run_id: str) -> list:
         return self._get(self._key_history(run_id)) or []

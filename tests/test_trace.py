@@ -71,6 +71,21 @@ class TestNewEvent:
         ev = tracer.new_event(run_id="r1", node="decompose", depth=0, metadata={"subtasks": ["a", "b"]})
         assert ev["metadata"]["subtasks"] == ["a", "b"]
 
+    def test_llm_token_counts_stored(self):
+        counts = {"prompt_tokens": 512, "completion_tokens": 128, "total_tokens": 640}
+        ev = tracer.new_event(run_id="r1", node="synthesize", depth=0, llm_token_counts=counts)
+        assert ev["llm_token_counts"] == counts
+
+    def test_latency_breakdown_stored(self):
+        breakdown = {"llm_ms": 850, "policy_ms": 40, "overhead_ms": 12}
+        ev = tracer.new_event(run_id="r1", node="synthesize", depth=0, latency_breakdown=breakdown)
+        assert ev["latency_breakdown"] == breakdown
+
+    def test_new_fields_default_none(self):
+        ev = tracer.new_event(run_id="r1", node="preflight", depth=0)
+        assert ev["llm_token_counts"] is None
+        assert ev["latency_breakdown"] is None
+
 
 # --------------------------------------------------------------------------- #
 #  dump                                                                        #
@@ -80,7 +95,7 @@ class TestDump:
     def test_empty_run_produces_valid_schema(self):
         state = _minimal_state()
         doc = tracer.dump(state, started_at="2026-04-10T14:00:00+00:00")
-        assert doc["schema_version"] == "1.0"
+        assert doc["schema_version"] == "1.1"
         assert doc["run_id"] == "test_run_001"
         assert doc["events"] == []
         assert doc["edges"] == []

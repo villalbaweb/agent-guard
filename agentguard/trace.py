@@ -50,25 +50,33 @@ def new_event(
     status: str = "ok",
     duration_ms: Optional[int] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    llm_token_counts: Optional[Dict[str, int]] = None,
+    latency_breakdown: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """Return a new trace event as a plain JSON-serializable dict.
 
     Args:
-        run_id:           Equals root_task_id for all events in a run.
-        node:             Graph node name: "preflight" | "decompose" | "plan" |
-                          "execute_subtasks" | "synthesize" | "reject"
-        depth:            Current recursion depth (0 = root graph).
-        parent_event_id:  event_id of the causally preceding event, or None for
-                          the root event.
-        agent_id:         Registry ID of the executing agent (execute_subtasks only).
-        action:           Policy action string (e.g. "invoke_search_agent_01").
-        intent:           Human-readable intent passed to the policy engine.
-        decision:         GovernanceDecision dict emitted by PolicyEngine.
-        cost_delta:       USD cost attributed to this specific step.
-        cumulative_cost:  Running total cost at event creation time.
-        status:           "ok" | "blocked" | "hitl_pending" | "error"
-        duration_ms:      Wall-clock duration of the node, if measured.
-        metadata:         Free-form extras (subtask list, llm provider, etc.).
+        run_id:             Equals root_task_id for all events in a run.
+        node:               Graph node name: "preflight" | "decompose" | "plan" |
+                            "execute_subtasks" | "synthesize" | "reject"
+        depth:              Current recursion depth (0 = root graph).
+        parent_event_id:    event_id of the causally preceding event, or None for
+                            the root event.
+        agent_id:           Registry ID of the executing agent (execute_subtasks only).
+        action:             Policy action string (e.g. "invoke_search_agent_01").
+        intent:             Human-readable intent passed to the policy engine.
+        decision:           GovernanceDecision dict emitted by PolicyEngine.
+        cost_delta:         USD cost attributed to this specific step.
+        cumulative_cost:    Running total cost at event creation time.
+        status:             "ok" | "blocked" | "hitl_pending" | "error"
+        duration_ms:        Wall-clock duration of the node, if measured.
+        metadata:           Free-form extras (subtask list, llm provider, etc.).
+        llm_token_counts:   Token usage breakdown, e.g.
+                            {"prompt_tokens": 512, "completion_tokens": 128, "total_tokens": 640}.
+                            Populate at call sites that invoke an LLM to make cost visible.
+        latency_breakdown:  Per-phase latency in ms, e.g.
+                            {"llm_ms": 850, "policy_ms": 40, "overhead_ms": 12}.
+                            Populate alongside duration_ms for fine-grained profiling.
 
     Returns:
         Dict with all TraceEvent fields, ready for json.dumps().
@@ -89,6 +97,8 @@ def new_event(
         "cumulative_cost": cumulative_cost,
         "status": status,
         "metadata": metadata or {},
+        "llm_token_counts": llm_token_counts,
+        "latency_breakdown": latency_breakdown,
     }
 
 
@@ -146,7 +156,7 @@ def dump(
     ]
 
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "run_id": state.get("root_task_id", "unknown"),
         "task": task or state.get("task", ""),
         "started_at": started_at,

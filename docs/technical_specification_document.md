@@ -1,7 +1,7 @@
 # AgentGuard: Technical Specification Document (TSD)
 
 ## 1. Introduction
-AgentGuard is a high-performance, policy-driven agentic operating system designed for enterprise-grade autonomous tasks. It integrates the recursive execution capabilities of Project SSA with the governance and observability frameworks of Project ACP.
+AgentGuard is a research testbed for governed, recursive multi-agent systems. It integrates the recursive execution capabilities of Project SSA with the governance and observability frameworks of Project ACP.
 
 ## 2. Architecture Overview
 AgentGuard operates as a **Stateful Agent Mesh**.
@@ -253,9 +253,9 @@ The AgentGuard registry is designed to be highly resilient:
 
 ---
 
-## 12. Customer Interaction Modes
+## 12. Interaction Surfaces
 
-Customers interact with AgentGuard through four distinct surfaces, each targeting a different persona.
+AgentGuard exposes four interaction surfaces for exploring different aspects of governed agentic systems.
 
 ### 12.1 REST API — Language-Agnostic Clients
 
@@ -287,7 +287,7 @@ Authorization: Bearer <approver_jwt>
 → 200 { "status": "resumed" }
 ```
 
-**Target persona:** Platform/DevOps teams, non-Python services, web UIs.
+**Use this surface when exploring:** REST-based integration, polling patterns, HITL flows, and language-agnostic governance interception.
 
 ---
 
@@ -326,7 +326,7 @@ final = graph.invoke(state)
 print(final["results"]["final_answer"])
 ```
 
-**Target persona:** Python ML/AI engineers embedding governance into existing pipelines.
+**Use this surface when exploring:** programmatic graph composition, state construction, and direct governance layer integration.
 
 ---
 
@@ -361,16 +361,16 @@ Hot-reload without restart:
 POST /policy/reload  →  { "reloaded": true, "rules_count": 6 }
 ```
 
-**Target persona:** Compliance officers, legal teams, security engineers.
+**Use this surface when exploring:** declarative rule design, hot-reload semantics, and the separation of policy authorship from engineering.
 
 ---
 
-### 12.4 Policy Scoping — Per-Tenant Rules (Planned — U-11)
+### 12.4 Policy Scoping — Per-Scenario Rules (Planned — U-11)
 
-Today, one `policy.yaml` applies to all runs on a server. Three architectural paths are being evaluated for multi-tenant isolation:
+Today, one `policy.yaml` applies to all runs on a server. Three architectural paths are being evaluated for per-scenario policy isolation:
 
-**Option A — Policy-per-tenant at request time (Recommended MVP)**
-`RunCreateRequest` adds a `policy_id` field. The backend resolves `policies/{tenant_id}.yaml` when building the executor for that run. Lowest complexity; maps cleanly to the existing `POLICY_FILE` env var pattern.
+**Option A — Policy-per-scenario at request time (Recommended MVP)**
+`RunCreateRequest` adds a `policy_id` field. The backend resolves `policies/{scenario_id}.yaml` when building the executor for that run. Lowest complexity; maps cleanly to the existing `POLICY_FILE` env var pattern.
 
 ```
 POST /runs
@@ -382,16 +382,16 @@ POST /runs
 ```
 
 **Option B — Layered inheritance (Recommended GA)**
-A base platform policy (PII, budget floor, offensive-security block) applies to all tenants and cannot be overridden. A tenant overlay adds domain-specific rules on top. Prevents tenants from disabling platform-level safeguards — critical for SaaS liability.
+A base platform policy (PII, budget floor, offensive-security block) applies to all scenarios and cannot be overridden. A scenario overlay adds domain-specific rules on top. Demonstrates immutable platform safeguards vs. overridable overlays.
 
 ```
 platform_base.yaml          ← immutable platform rules (PII, sanctions, budget floor)
-    └── meridian.yaml       ← tenant overlay (adds HITL thresholds, OFAC list)
-        └── desk_pm.yaml    ← role overlay (senior PM gets higher budget cap)
+    └── meridian.yaml       ← scenario overlay (adds HITL thresholds, OFAC list)
+        └── desk_pm.yaml    ← persona overlay (senior PM persona gets higher budget cap)
 ```
 
 **Option C — Agent-declared policy (Future)**
-Each agent declares its own required policy constraints at registration time. The `PolicyEngine` merges agent-level rules with the global policy at routing time. Most powerful — enables marketplace agents from third-party vendors to bring their own compliance posture. Highest implementation complexity; deferred to post-GA.
+Each agent declares its own required policy constraints at registration time. The `PolicyEngine` merges agent-level rules with the global policy at routing time. Most powerful — enables agents from independent experiments to bring their own compliance posture. Highest implementation complexity; deferred.
 
 ---
 

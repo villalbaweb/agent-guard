@@ -1,0 +1,2 @@
+[console_scripts]
+agentguard-eval = scripts.run_eval:main

@@ -39,6 +39,13 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("AgentGuard API starting up...")
+    allowed_origins = os.environ.get("ALLOWED_ORIGINS", "")
+    if not allowed_origins or allowed_origins.strip() == "*":
+        logger.warning(
+            "SECURITY: ALLOWED_ORIGINS is not set or is '*' (all origins accepted). "
+            "Set ALLOWED_ORIGINS to a comma-separated list of allowed origins before deploying. "
+            "See .env.example for an example value."
+        )
     # Optional background agent health checker (U-09/U-12)
     health_task = None
     try:

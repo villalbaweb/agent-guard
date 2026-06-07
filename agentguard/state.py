@@ -44,6 +44,7 @@ class AgentGuardState(TypedDict):
     parent_trace_event_id: Optional[str] # event_id of the parent graph's execute_subtasks event
     policy_id: Optional[str]             # tenant/policy selection for this run (U-11)
     _current_edge: Optional[Dict[str, Any]] # injected during Send for parallel workers
+    reflection_count: int                # tracks re-plan cycles; prevents infinite reflection loops
 
 def make_initial_state(
     task: str,
@@ -78,4 +79,5 @@ def make_initial_state(
         parent_trace_event_id=parent_trace_event_id,
         policy_id=policy_id,
         _current_edge=None,
+        reflection_count=0,
     )

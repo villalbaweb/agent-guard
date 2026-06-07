@@ -125,24 +125,87 @@ def create_token(auth_context: AuthContext) -> str:
     return pyjwt.encode(payload, _get_secret(), algorithm="HS256")
 
 
+def _get_jwks_public_key(token: str):
+    """Fetch and cache the matching public key from a JWKS endpoint.
+
+    Reads AGENTGUARD_JWKS_URL from the environment.  On first call the JWKS
+    document is fetched and cached in-process; subsequent calls reuse it.
+    Returns a key object suitable for pyjwt.decode(), or None if unavailable.
+
+    This implements the P-01 (JWKS / RS256) learning objective: understand how
+    OIDC identity providers (Okta, Auth0, Azure AD) issue tokens that a
+    relying-party service can validate without sharing a secret.
+    """
+    jwks_url = os.environ.get("AGENTGUARD_JWKS_URL", "")
+    if not jwks_url:
+        return None
+
+    # Decode header to find the key ID (kid)
+    try:
+        unverified_header = pyjwt.get_unverified_header(token)
+    except Exception:
+        return None
+    kid = unverified_header.get("kid")
+
+    global _jwks_cache
+    if _jwks_cache is None:
+        try:
+            import urllib.request
+            with urllib.request.urlopen(jwks_url, timeout=5) as resp:
+                import json as _json
+                _jwks_cache = _json.loads(resp.read())
+            logger.info(f"auth: fetched JWKS from {jwks_url}")
+        except Exception as e:
+            logger.error(f"auth: failed to fetch JWKS from {jwks_url}: {e}")
+            return None
+
+    try:
+        from jwt.algorithms import RSAAlgorithm
+        for key_data in _jwks_cache.get("keys", []):
+            if kid is None or key_data.get("kid") == kid:
+                import json as _json
+                return RSAAlgorithm.from_jwk(_json.dumps(key_data))
+    except Exception as e:
+        logger.error(f"auth: JWKS key extraction failed: {e}")
+
+    return None
+
+
+_jwks_cache = None   # module-level cache; reset by tests or on process restart
+
+
 def decode_token(token: str) -> AuthContext:
     """Verify and decode a JWT, returning an AuthContext.
 
+    Algorithm selection (P-01):
+      - If AGENTGUARD_JWKS_URL is set → RS256 via public key from JWKS endpoint.
+      - Otherwise → HS256 via AGENTGUARD_JWT_SECRET (development / self-hosted).
+
     Raises:
         RuntimeError: if PyJWT is not installed.
-        ValueError:   on any verification failure (expired, bad sig, etc.).
+        ValueError:   on any verification failure (expired, bad sig, wrong issuer).
     """
     if not _JWT_AVAILABLE:
         raise RuntimeError("PyJWT is not installed. Run: uv add pyjwt>=2.9.0")
 
+    jwks_key = _get_jwks_public_key(token) if _JWT_AVAILABLE else None
+
     try:
-        payload = pyjwt.decode(
-            token,
-            _get_secret(),
-            algorithms=["HS256"],
-            issuer=_get_issuer(),
-            options={"require": ["sub", "exp", "iat", "jti"]},
-        )
+        if jwks_key is not None:
+            payload = pyjwt.decode(
+                token,
+                jwks_key,
+                algorithms=["RS256"],
+                options={"require": ["sub", "exp", "iat", "jti"]},
+            )
+        else:
+            payload = pyjwt.decode(
+                token,
+                _get_secret(),
+                algorithms=["HS256"],
+                issuer=_get_issuer(),
+                options={"require": ["sub", "exp", "iat", "jti"]},
+            )
     except pyjwt.ExpiredSignatureError:
         raise ValueError("JWT has expired.")
     except pyjwt.InvalidIssuerError:
