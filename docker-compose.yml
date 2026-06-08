@@ -46,7 +46,7 @@ services:
     env_file: .env
     environment:
       REDIS_URL: redis://redis:6379
-      DATABASE_URL: postgresql://$${POSTGRES_USER:-agent_user}:$${POSTGRES_PASSWORD}@postgres:5432/$${POSTGRES_DB:-agent_db}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agent_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-agent_db}
     depends_on:
       redis:
         condition: service_healthy
