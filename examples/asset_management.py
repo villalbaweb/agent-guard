@@ -244,6 +244,7 @@ def run_scenario(
         finished_at=finished_at,
         final_status=final_status,
     )
+    memory.store_trace(run_id, trace_doc)
     trace_path = tracer.write_to_disk(trace_doc, directory=TRACES_DIR)
     logger.info(f"  Trace    : {trace_path}")
 

@@ -149,11 +149,62 @@ def dump(
         events = [redactor(e) for e in events]
 
     # Build adjacency list for graph visualization
-    edges = [
-        {"from": e["parent_event_id"], "to": e["event_id"]}
-        for e in events
-        if e.get("parent_event_id")
-    ]
+    # 1. Map event_id to all its direct child event_ids
+    children_map = {}
+    for e in events:
+        parent = e.get("parent_event_id")
+        if parent:
+            children_map.setdefault(parent, []).append(e["event_id"])
+
+    # 2. Build edges: parent-child causal relationships for non-synthesize nodes
+    edges = []
+    for e in events:
+        parent = e.get("parent_event_id")
+        # Synthesize nodes converge all parallel branches, handled below
+        if parent and e["node"] != "synthesize":
+            edges.append({"from": parent, "to": e["event_id"]})
+
+    # 3. For each synthesize event, link all leaf descendants of its sibling worker branches
+    synthesize_events = [e for e in events if e["node"] == "synthesize"]
+    for s in synthesize_events:
+        depth = s["depth"]
+        # Find the plan event at the same depth that occurred before S
+        plan_events = [
+            e for e in events 
+            if e["node"] == "plan" 
+            and e["depth"] == depth
+        ]
+        s_index = events.index(s)
+        preceding_plans = [e for e in plan_events if events.index(e) < s_index]
+        
+        if preceding_plans:
+            plan_event = preceding_plans[-1]
+            # Find direct worker children of this plan event
+            workers = [
+                e for e in events 
+                if e["node"] == "worker" 
+                and e["depth"] == depth 
+                and e.get("parent_event_id") == plan_event["event_id"]
+            ]
+            for w in workers:
+                # Traverse descendants to find all final leaf events of this branch
+                leaves = []
+                queue = [w["event_id"]]
+                while queue:
+                    curr = queue.pop(0)
+                    children = children_map.get(curr, [])
+                    if not children:
+                        leaves.append(curr)
+                    else:
+                        queue.extend(children)
+                
+                # Connect each leaf of the branch to the synthesize event S
+                for leaf in leaves:
+                    edges.append({"from": leaf, "to": s["event_id"]})
+        else:
+            # Fallback: link the last event before synthesize to it
+            if s_index > 0:
+                edges.append({"from": events[s_index - 1]["event_id"], "to": s["event_id"]})
 
     return {
         "schema_version": "1.1",

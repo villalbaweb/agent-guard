@@ -1,10 +1,10 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import axios from 'axios';
 import cytoscape from 'cytoscape';
 import CytoscapeComponent from 'react-cytoscapejs';
 import dagre from 'cytoscape-dagre';
 import fcose from 'cytoscape-fcose';
-import { Search, Loader2, AlertCircle, Info, DollarSign, Clock, Shield, Moon, Sun, RefreshCw, FileText, Cpu } from 'lucide-react';
+import { Search, Loader2, AlertCircle, Info, DollarSign, Clock, Shield, Moon, Sun, RefreshCw, FileText, Cpu, X } from 'lucide-react';
 import type { TraceEvent, TraceResponse, PolicyResponse } from './types';
 
 cytoscape.use(dagre);
@@ -22,6 +22,9 @@ function App() {
   const [elements, setElements] = useState<any[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<TraceEvent | null>(null);
   const [cyInstance, setCyInstance] = useState<cytoscape.Core | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null);
+  const [containerWidth, setContainerWidth] = useState<number>(0);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [isDarkMode, setIsDarkMode] = useState(false);
 
   // Policy tab state
@@ -37,6 +40,32 @@ function App() {
       document.documentElement.classList.remove('dark');
     }
   }, [isDarkMode]);
+
+  // Synchronize tooltip position with Cytoscape events (pan, zoom, node drag, canvas resize)
+  useEffect(() => {
+    if (!cyInstance || !selectedEvent) {
+      setTooltipPosition(null);
+      return;
+    }
+
+    const updatePosition = () => {
+      const node = cyInstance.getElementById(selectedEvent.event_id);
+      if (node && node.length > 0) {
+        setTooltipPosition(node.renderedPosition());
+      }
+      if (containerRef.current) {
+        setContainerWidth(containerRef.current.clientWidth);
+      }
+    };
+
+    updatePosition();
+
+    cyInstance.on('pan zoom position resize', updatePosition);
+
+    return () => {
+      cyInstance.off('pan zoom position resize', updatePosition);
+    };
+  }, [cyInstance, selectedEvent]);
 
   const fetchTrace = async (id: string, token: string) => {
     if (!id) return;
@@ -476,7 +505,10 @@ function App() {
         {activeTab === 'trace' && (
           <>
             {/* Cytoscape Canvas */}
-            <div className={`flex-1 relative ${isDarkMode ? 'bg-slate-950' : 'bg-slate-50'}`}>
+            <div 
+              ref={containerRef}
+              className={`flex-1 relative ${isDarkMode ? 'bg-slate-950' : 'bg-slate-50'}`}
+            >
               {error && (
                 <div className={`absolute top-4 left-1/2 transform -translate-x-1/2 px-4 py-3 rounded-md shadow-sm flex items-center space-x-2 z-20 border ${isDarkMode ? 'bg-red-950 border-red-900 text-red-200' : 'bg-red-50 border-red-200 text-red-700'}`}>
                   <AlertCircle className="h-5 w-5 flex-shrink-0" />
@@ -507,157 +539,236 @@ function App() {
                   }}
                 />
               )}
-            </div>
 
-            {/* Sidebar / Details Panel */}
-            {selectedEvent && (
-              <div className={`w-96 border-l flex flex-col shadow-xl z-20 shrink-0 overflow-y-auto ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
-                <div className={`p-4 border-b sticky top-0 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
-                  <h2 className="text-lg font-semibold flex items-center justify-between">
-                    <span>Node: {selectedEvent.node}</span>
-                    <span className={`text-xs px-2 py-1 rounded-full border ${
-                        selectedEvent.status === 'ok' ? (isDarkMode ? 'bg-green-900 text-green-200 border-green-800' : 'bg-green-100 text-green-800 border-green-200') :
-                        selectedEvent.status === 'blocked' || selectedEvent.status === 'error' ? (isDarkMode ? 'bg-red-900 text-red-200 border-red-800' : 'bg-red-100 text-red-800 border-red-200') :
-                        selectedEvent.status === 'hitl_pending' ? (isDarkMode ? 'bg-yellow-900 text-yellow-200 border-yellow-800' : 'bg-yellow-100 text-yellow-800 border-yellow-200') :
-                        (isDarkMode ? 'bg-slate-800 text-slate-200 border-slate-700' : 'bg-slate-100 text-slate-800 border-slate-200')
+              {/* Custom Tooltip Overlay */}
+              {selectedEvent && tooltipPosition && (() => {
+                const isAbove = tooltipPosition.y >= 350;
+                let leftPos = tooltipPosition.x;
+                let tooltipTransform = 'translate(-50%, -100%) translateY(-15px)';
+                let arrowStyle: React.CSSProperties = {
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                };
+
+                if (!isAbove) {
+                  tooltipTransform = 'translate(-50%, 0%) translateY(15px)';
+                }
+
+                if (containerWidth > 0) {
+                  const tooltipWidth = 384; // w-96 is 384px
+                  const halfWidth = tooltipWidth / 2;
+                  const padding = 16;
+
+                  const minLeft = halfWidth + padding;
+                  const maxLeft = containerWidth - halfWidth - padding;
+
+                  if (leftPos < minLeft) {
+                    leftPos = minLeft;
+                    const offset = tooltipPosition.x - minLeft;
+                    arrowStyle = {
+                      left: `calc(50% + ${offset}px)`,
+                      transform: 'translateX(-50%)',
+                    };
+                  } else if (leftPos > maxLeft) {
+                    leftPos = maxLeft;
+                    const offset = tooltipPosition.x - maxLeft;
+                    arrowStyle = {
+                      left: `calc(50% + ${offset}px)`,
+                      transform: 'translateX(-50%)',
+                    };
+                  }
+                }
+
+                return (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: `${leftPos}px`,
+                      top: `${tooltipPosition.y}px`,
+                      transform: tooltipTransform,
+                    }}
+                    className={`absolute z-30 w-96 rounded-xl border flex flex-col max-h-[450px] shadow-2xl transition-all duration-200 ${
+                      isDarkMode 
+                        ? 'bg-slate-900/95 border-slate-700/80 text-slate-100 backdrop-blur-md shadow-black/40' 
+                        : 'bg-white/95 border-slate-200 text-slate-800 backdrop-blur-md shadow-slate-300/50'
+                    }`}
+                  >
+                    {/* Tooltip Header */}
+                    <div className={`p-3 border-b flex items-center justify-between sticky top-0 rounded-t-xl z-10 ${
+                      isDarkMode ? 'bg-slate-900/95 border-slate-700/80' : 'bg-slate-50/95 border-slate-200/80'
                     }`}>
-                      {selectedEvent.status.toUpperCase()}
-                    </span>
-                  </h2>
-                  <p className={`text-xs font-mono mt-1 break-all ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>{selectedEvent.event_id}</p>
-                </div>
-
-                <div className="p-4 space-y-6">
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className={`p-3 rounded-lg border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
-                      <div className={`flex items-center mb-1 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                        <Clock className="h-4 w-4 mr-1" />
-                        <span className="text-xs font-medium uppercase tracking-wider">Duration</span>
-                      </div>
-                      <div className="text-sm font-semibold">
-                        {selectedEvent.duration_ms != null ? `${selectedEvent.duration_ms} ms` : 'N/A'}
-                      </div>
-                    </div>
-
-                    <div className={`p-3 rounded-lg border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
-                      <div className={`flex items-center mb-1 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                        <DollarSign className="h-4 w-4 mr-1" />
-                        <span className="text-xs font-medium uppercase tracking-wider">Cost</span>
-                      </div>
-                      <div className="text-sm font-semibold">
-                        ${selectedEvent.cost_delta.toFixed(4)}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Token Counts (schema 1.1) */}
-                  {selectedEvent.llm_token_counts && (
-                    <div className="space-y-3">
-                      <h3 className={`text-sm font-medium border-b pb-1 flex items-center gap-1.5 ${isDarkMode ? 'text-slate-200 border-slate-700' : 'text-slate-900 border-slate-200'}`}>
-                        <Cpu className="h-4 w-4 text-blue-500" />
-                        Token Usage
-                      </h3>
-                      <div className="grid grid-cols-3 gap-2">
-                        {Object.entries(selectedEvent.llm_token_counts).map(([k, v]) => (
-                          <div key={k} className={`p-2 rounded border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
-                            <span className={`text-xs block mb-0.5 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>{k.replace('_tokens', '')}</span>
-                            <span className="text-sm font-semibold font-mono">{v.toLocaleString()}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Latency Breakdown (schema 1.1) */}
-                  {selectedEvent.latency_breakdown && (
-                    <div className="space-y-3">
-                      <h3 className={`text-sm font-medium border-b pb-1 flex items-center gap-1.5 ${isDarkMode ? 'text-slate-200 border-slate-700' : 'text-slate-900 border-slate-200'}`}>
-                        <Clock className="h-4 w-4 text-purple-500" />
-                        Latency Breakdown
-                      </h3>
-                      <div className="grid grid-cols-3 gap-2">
-                        {Object.entries(selectedEvent.latency_breakdown).map(([k, v]) => (
-                          <div key={k} className={`p-2 rounded border ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
-                            <span className={`text-xs block mb-0.5 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>{k.replace('_ms', '')}</span>
-                            <span className="text-sm font-semibold font-mono">{v} ms</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Core Details */}
-                  <div className="space-y-3">
-                    <h3 className={`text-sm font-medium border-b pb-1 ${isDarkMode ? 'text-slate-200 border-slate-700' : 'text-slate-900 border-slate-200'}`}>Execution Details</h3>
-
-                    {selectedEvent.agent_id && (
-                      <div>
-                        <span className={`text-xs block mb-1 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Agent ID</span>
-                        <span className={`text-sm px-2 py-1 rounded font-mono ${isDarkMode ? 'bg-slate-800' : 'bg-slate-100'}`}>{selectedEvent.agent_id}</span>
-                      </div>
-                    )}
-
-                    <div>
-                      <span className={`text-xs block mb-1 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Depth</span>
-                      <span className="text-sm">{selectedEvent.depth}</span>
-                    </div>
-
-                    {selectedEvent.action && (
-                      <div>
-                        <span className={`text-xs block mb-1 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Action</span>
-                        <span className={`text-sm font-mono p-1 rounded break-all ${isDarkMode ? 'bg-slate-800' : 'bg-slate-50'}`}>{selectedEvent.action}</span>
-                      </div>
-                    )}
-
-                    {selectedEvent.intent && (
-                      <div>
-                        <span className={`text-xs block mb-1 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Intent</span>
-                        <p className={`text-sm p-2 rounded-md border whitespace-pre-wrap ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
-                          {selectedEvent.intent}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Governance Decision */}
-                  {selectedEvent.decision && (
-                    <div className="space-y-3">
-                      <h3 className={`text-sm font-medium border-b pb-1 ${isDarkMode ? 'text-slate-200 border-slate-700' : 'text-slate-900 border-slate-200'}`}>Governance Decision</h3>
-                      <div className={`p-3 rounded-md border ${
-                          selectedEvent.decision.allowed
-                            ? (isDarkMode ? 'bg-green-950 border-green-900' : 'bg-green-50 border-green-200')
-                            : (isDarkMode ? 'bg-red-950 border-red-900' : 'bg-red-50 border-red-200')
-                      }`}>
-                        <div className="flex justify-between items-center mb-2">
-                           <span className="text-xs font-semibold">Allowed: {selectedEvent.decision.allowed ? 'Yes' : 'No'}</span>
-                           {selectedEvent.decision.hitl_required && (
-                               <span className={`text-xs px-2 py-0.5 rounded border ${isDarkMode ? 'bg-yellow-950 text-yellow-200 border-yellow-800' : 'bg-yellow-100 text-yellow-800 border-yellow-300'}`}>HITL Required</span>
-                           )}
+                      <div className="flex flex-col min-w-0 pr-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-sm truncate">{selectedEvent.node}</span>
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border shrink-0 ${
+                              selectedEvent.status === 'ok' ? (isDarkMode ? 'bg-green-950/60 text-green-400 border-green-900/40' : 'bg-green-50 text-green-700 border-green-200') :
+                              selectedEvent.status === 'blocked' || selectedEvent.status === 'error' ? (isDarkMode ? 'bg-red-950/60 text-red-400 border-red-900/40' : 'bg-red-50 text-red-700 border-red-200') :
+                              selectedEvent.status === 'hitl_pending' ? (isDarkMode ? 'bg-yellow-950/60 text-yellow-400 border-yellow-900/40' : 'bg-yellow-50 text-yellow-700 border-yellow-250') :
+                              (isDarkMode ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-slate-100 text-slate-700 border-slate-200')
+                          }`}>
+                            {selectedEvent.status.toUpperCase()}
+                          </span>
                         </div>
-                        {selectedEvent.decision.reason && (
-                          <p className={`text-sm italic border-t pt-2 mt-2 ${isDarkMode ? 'text-slate-300 border-slate-700' : 'text-slate-700 border-white/50'}`}>
-                            "{selectedEvent.decision.reason}"
-                          </p>
+                        <span className={`text-[10px] font-mono mt-0.5 truncate ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                          ID: {selectedEvent.event_id}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setSelectedEvent(null)}
+                        className={`p-1.5 rounded-full transition-colors ${
+                          isDarkMode ? 'hover:bg-slate-800 text-slate-400 hover:text-slate-200' : 'hover:bg-slate-200/80 text-slate-50 hover:text-slate-700'
+                        }`}
+                        title="Close tooltip"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    {/* Tooltip Scrollable Content */}
+                    <div className="p-4 overflow-y-auto space-y-4 text-xs scrollbar-thin">
+                      
+                      {/* Summary Metrics */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className={`p-2.5 rounded-lg border ${isDarkMode ? 'bg-slate-800/40 border-slate-700/60' : 'bg-slate-50 border-slate-100'}`}>
+                          <div className={`flex items-center mb-0.5 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                            <Clock className="h-3.5 w-3.5 mr-1" />
+                            <span className="text-[10px] font-medium uppercase tracking-wider">Duration</span>
+                          </div>
+                          <div className="text-xs font-semibold">
+                            {selectedEvent.duration_ms != null ? `${selectedEvent.duration_ms} ms` : 'N/A'}
+                          </div>
+                        </div>
+
+                        <div className={`p-2.5 rounded-lg border ${isDarkMode ? 'bg-slate-800/40 border-slate-700/60' : 'bg-slate-50 border-slate-100'}`}>
+                          <div className={`flex items-center mb-0.5 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                            <DollarSign className="h-3.5 w-3.5 mr-1" />
+                            <span className="text-[10px] font-medium uppercase tracking-wider">Cost</span>
+                          </div>
+                          <div className="text-xs font-semibold">
+                            ${selectedEvent.cost_delta.toFixed(4)}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Token Counts */}
+                      {selectedEvent.llm_token_counts && (
+                        <div className="space-y-1.5">
+                          <h3 className={`text-[10px] font-semibold uppercase tracking-wider flex items-center gap-1 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                            <Cpu className="h-3.5 w-3.5 text-blue-500" />
+                            Token Usage
+                          </h3>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            {Object.entries(selectedEvent.llm_token_counts).map(([k, v]) => (
+                              <div key={k} className={`p-1.5 rounded border text-center ${isDarkMode ? 'bg-slate-800/40 border-slate-700/60' : 'bg-slate-50 border-slate-100'}`}>
+                                <span className={`text-[9px] block mb-0.5 uppercase ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{k.replace('_tokens', '')}</span>
+                                <span className="text-xs font-semibold font-mono">{v.toLocaleString()}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Latency Breakdown */}
+                      {selectedEvent.latency_breakdown && (
+                        <div className="space-y-1.5">
+                          <h3 className={`text-[10px] font-semibold uppercase tracking-wider flex items-center gap-1 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                            <Clock className="h-3.5 w-3.5 text-purple-500" />
+                            Latency Breakdown
+                          </h3>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            {Object.entries(selectedEvent.latency_breakdown).map(([k, v]) => (
+                              <div key={k} className={`p-1.5 rounded border text-center ${isDarkMode ? 'bg-slate-800/40 border-slate-700/60' : 'bg-slate-50 border-slate-100'}`}>
+                                <span className={`text-[9px] block mb-0.5 uppercase ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{k.replace('_ms', '')}</span>
+                                <span className="text-xs font-semibold font-mono">{v} ms</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Execution Details */}
+                      <div className="space-y-2 border-t pt-3 border-slate-200/40 dark:border-slate-700/40">
+                        <h4 className={`text-[10px] font-semibold uppercase tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Execution Details</h4>
+
+                        {selectedEvent.agent_id && (
+                          <div className="flex justify-between items-center text-xs">
+                            <span className={isDarkMode ? 'text-slate-400' : 'text-slate-500'}>Agent ID</span>
+                            <span className={`font-mono px-1.5 py-0.5 rounded ${isDarkMode ? 'bg-slate-800' : 'bg-slate-100'}`}>{selectedEvent.agent_id}</span>
+                          </div>
+                        )}
+
+                        <div className="flex justify-between items-center text-xs">
+                          <span className={isDarkMode ? 'text-slate-400' : 'text-slate-500'}>Depth</span>
+                          <span className="font-semibold">{selectedEvent.depth}</span>
+                        </div>
+
+                        {selectedEvent.action && (
+                          <div className="space-y-0.5">
+                            <span className={`block text-[10px] ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Action</span>
+                            <span className={`block font-mono text-[11px] p-1.5 rounded break-all leading-tight ${isDarkMode ? 'bg-slate-800' : 'bg-slate-50'}`}>{selectedEvent.action}</span>
+                          </div>
+                        )}
+
+                        {selectedEvent.intent && (
+                          <div className="space-y-0.5">
+                            <span className={`block text-[10px] ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Intent</span>
+                            <p className={`p-2 rounded-md border whitespace-pre-wrap leading-relaxed ${isDarkMode ? 'bg-slate-800/60 border-slate-700/60 text-slate-300' : 'bg-slate-50 border-slate-100 text-slate-700'}`}>
+                              {selectedEvent.intent}
+                            </p>
+                          </div>
                         )}
                       </div>
-                    </div>
-                  )}
 
-                  {/* Metadata */}
-                  {selectedEvent.metadata && Object.keys(selectedEvent.metadata).length > 0 && (
-                    <div className="space-y-3">
-                      <h3 className={`text-sm font-medium border-b pb-1 ${isDarkMode ? 'text-slate-200 border-slate-700' : 'text-slate-900 border-slate-200'}`}>Metadata</h3>
-                      <div className={`rounded-md p-3 overflow-x-auto ${isDarkMode ? 'bg-slate-950 border border-slate-800' : 'bg-slate-900'}`}>
-                        <pre className="text-xs text-slate-300 font-mono">
-                          {JSON.stringify(selectedEvent.metadata, null, 2)}
-                        </pre>
-                      </div>
+                      {/* Governance Decision */}
+                      {selectedEvent.decision && (
+                        <div className="space-y-1.5 border-t pt-3 border-slate-200/40 dark:border-slate-700/40">
+                          <h4 className={`text-[10px] font-semibold uppercase tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Governance Decision</h4>
+                          <div className={`p-2.5 rounded-md border ${
+                              selectedEvent.decision.allowed
+                                ? (isDarkMode ? 'bg-green-950/35 border-green-900/50 text-green-200' : 'bg-green-50/60 border-green-200 text-green-800')
+                                : (isDarkMode ? 'bg-red-950/35 border-red-900/50 text-red-200' : 'bg-red-50/60 border-red-200 text-red-800')
+                          }`}>
+                            <div className="flex justify-between items-center">
+                              <span className="font-semibold">Allowed: {selectedEvent.decision.allowed ? 'Yes' : 'No'}</span>
+                              {selectedEvent.decision.hitl_required && (
+                                <span className={`text-[9px] px-1.5 py-0.5 rounded border ${isDarkMode ? 'bg-yellow-950/50 text-yellow-300 border-yellow-800' : 'bg-yellow-100 text-yellow-800 border-yellow-250'}`}>HITL Required</span>
+                              )}
+                            </div>
+                            {selectedEvent.decision.reason && (
+                              <p className={`italic border-t pt-1.5 mt-1.5 text-[11px] leading-relaxed ${isDarkMode ? 'text-slate-300 border-slate-800/80' : 'text-slate-700 border-slate-200/80'}`}>
+                                "{selectedEvent.decision.reason}"
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Telemetry & Metadata */}
+                      {selectedEvent.metadata && Object.keys(selectedEvent.metadata).length > 0 && (
+                        <div className="space-y-1.5 border-t pt-3 border-slate-200/40 dark:border-slate-700/40">
+                          <h4 className={`text-[10px] font-semibold uppercase tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Metadata</h4>
+                          <div className={`rounded-md p-2 overflow-x-auto ${isDarkMode ? 'bg-slate-950 border border-slate-800' : 'bg-slate-900/80'}`}>
+                            <pre className="text-[10px] text-slate-300 font-mono leading-tight">
+                              {JSON.stringify(selectedEvent.metadata, null, 2)}
+                            </pre>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              </div>
-            )}
+
+                    {/* Little triangle arrow at the edge of the tooltip */}
+                    <div
+                      style={arrowStyle}
+                      className={`absolute w-0 h-0 border-l-[8px] border-r-[8px] border-l-transparent border-r-transparent ${
+                        isAbove 
+                          ? `bottom-0 translate-y-full border-t-[8px] ${isDarkMode ? 'border-t-slate-900/95' : 'border-t-white/95'}` 
+                          : `top-0 -translate-y-full border-b-[8px] ${isDarkMode ? 'border-b-slate-900/95' : 'border-b-white/95'}`
+                      }`}
+                    />
+                  </div>
+                );
+              })()}
+            </div>
           </>
         )}
       </div>
