@@ -31,7 +31,6 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
-import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -411,7 +410,6 @@ class Registry:
         probe_url = endpoint if endpoint.endswith("/health") else f"{endpoint}/health"
         timeout = int(os.environ.get("AGENT_HEALTH_TIMEOUT", "5"))
         try:
-            import asyncio
             import httpx
 
             async with httpx.AsyncClient(timeout=timeout) as client:

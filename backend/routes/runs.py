@@ -44,7 +44,7 @@ def create_run(
     run_id = store.new_run_id()
     submitted_at = datetime.now(timezone.utc)
 
-    record = store.create_run(run_id=run_id, task=body.task, subject=auth.subject)
+    store.create_run(run_id=run_id, task=body.task, subject=auth.subject)
     store.set_status(run_id, "running")
 
     background_tasks.add_task(
@@ -61,6 +61,29 @@ def create_run(
         status="running",
         submitted_at=submitted_at,
     )
+
+
+def _pop_interrupts(final_state: Any) -> List[Dict[str, Any]]:
+    """Remove "__interrupt__" from an invoked graph's state and return the
+    pending HITL payloads as plain JSON-serializable dicts.
+
+    Each payload is annotated with its LangGraph "interrupt_id" — required to
+    resume a specific step when several parallel workers are paused at once.
+    """
+    if not isinstance(final_state, dict):
+        return []
+    pending: List[Dict[str, Any]] = []
+    for intr in final_state.pop("__interrupt__", None) or []:
+        value = getattr(intr, "value", intr)  # langgraph Interrupt object
+        interrupt_id = getattr(intr, "id", None)
+        items = value if isinstance(value, list) else [value]
+        for item in items:
+            if isinstance(item, dict):
+                entry = dict(item)
+                if interrupt_id:
+                    entry["interrupt_id"] = interrupt_id
+                pending.append(entry)
+    return pending
 
 
 def _execute_run(
@@ -89,12 +112,18 @@ def _execute_run(
         finished_at = tracer._now_iso()
         signal = final_state.get("global_signal", "")
 
-        if "REJECT" in signal:
+        # When a checkpointer is configured, a HITL pause surfaces as
+        # "__interrupt__" in the returned state (the worker raised
+        # GraphInterrupt and LangGraph checkpointed the thread).  Pop it:
+        # Interrupt objects are not JSON-serializable.
+        interrupts = _pop_interrupts(final_state)
+
+        if interrupts:
+            final_status = "hitl_pending"
+        elif "REJECT" in signal:
             final_status = "blocked"
         elif "HITL" in signal:
             final_status = "hitl_pending"
-        elif "DONE" in signal:
-            final_status = "completed"
         else:
             final_status = "completed"
 
@@ -119,8 +148,9 @@ def _execute_run(
             "hitl": sum(1 for d in decisions if d.get("hitl_required")),
         }
 
-        # Collect HITL pending steps
-        pending_steps = [
+        # Collect HITL pending steps: from interrupt payloads (checkpointer
+        # path) or from trace events (fallback path without checkpointer).
+        pending_steps = list(interrupts) or [
             e for e in final_state.get("trace_events", [])
             if e.get("status") == "hitl_pending"
         ]
@@ -299,28 +329,46 @@ def approve_run(
             "event_id": body.event_id,
             "notes": body.notes,
         }
-        final_state = graph.invoke(None, config=config, command=Command(resume=approval_payload))
+        # Target the specific paused step: when multiple parallel workers are
+        # interrupted, LangGraph requires resuming by interrupt id.
+        pending = record.get("pending_steps") or []
+        matched = next((p for p in pending if p.get("event_id") == body.event_id), None)
+        interrupt_id = (matched or {}).get("interrupt_id")
+        resume_value = {interrupt_id: approval_payload} if interrupt_id else approval_payload
+
+        # The resume command IS the graph input — interrupt() inside the worker
+        # returns approval_payload and execution continues from the checkpoint.
+        final_state = graph.invoke(Command(resume=resume_value), config=config)
+
+        # The resumed run may pause again on a later HITL step.
+        interrupts = _pop_interrupts(final_state)
+        final_status = "hitl_pending" if interrupts else "completed"
 
         finished_at = tracer._now_iso()
         trace_doc = tracer.dump(
             state=final_state,
             started_at=record.get("submitted_at", ""),
             finished_at=finished_at,
-            final_status="completed",
+            final_status=final_status,
         )
         store.save_trace(run_id, trace_doc)
         store.save_state(run_id, final_state)
         store.set_status(
-            run_id, "completed",
+            run_id, final_status,
             final_answer=final_state.get("results", {}).get("final_answer"),
             total_cost_usd=final_state.get("usage_stats", {}).get("total_cost", 0.0),
+            pending_steps=interrupts,
             finished_at=finished_at,
         )
-        logger.info(f"Run {run_id} HITL approved and completed by {approver.subject}")
+        logger.info(f"Run {run_id} HITL approved by {approver.subject} — now {final_status}")
 
     except Exception as exc:
         logger.exception(f"Failed to resume run {run_id}: {exc}")
         store.set_status(run_id, "error", error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to resume run '{run_id}': {exc}",
+        )
 
     return ApproveResponse(
         run_id=run_id,

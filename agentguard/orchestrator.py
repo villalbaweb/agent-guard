@@ -17,8 +17,13 @@ class ExecutionPlanner:
         else:
             logger.info("ExecutionPlanner: no LLM — using mock routing.")
 
-    def decompose(self, state: AgentGuardState) -> AgentGuardState:
-        """Break the top-level task into focused, clean subtask descriptions."""
+    def decompose(self, state: AgentGuardState) -> Dict[str, Any]:
+        """Break the top-level task into focused, clean subtask descriptions.
+
+        Returns a partial state update (LangGraph merges it via the channel
+        reducers) — returning the full state would re-append accumulated
+        lists like governance_decisions through their ``operator.add`` reducers.
+        """
         task = state.get("task", "")
         subtasks = []
 
@@ -48,16 +53,18 @@ class ExecutionPlanner:
         if not subtasks:
             subtasks = [f"Research the topic: {task}", f"Analyze and summarize: {task}"]
 
-        state["results"] = state.get("results", {})
-        state["results"]["subtasks"] = subtasks
-        return state
+        return {"results": {"subtasks": subtasks}}
 
     def route_intent(self, intent: str) -> List[Dict[str, Any]]:
         """Look up registered agents that can handle this intent."""
         return self.registry.search_by_intent(intent)
 
-    def plan(self, state: AgentGuardState) -> AgentGuardState:
+    def plan(self, state: AgentGuardState) -> Dict[str, Any]:
         """Map each subtask to the best available agent via intent extraction.
+
+        Returns a partial state update: ``all_edges`` carries the fresh edge
+        list for this planning pass (the reducer replaces any prior list,
+        which keeps replans from dispatching stale edges twice).
 
         Optimisation (U-09): when the Registry is backed by PostgreSQL + pgvector,
         the full subtask text is embedded and compared against agent descriptions
@@ -110,5 +117,4 @@ class ExecutionPlanner:
                 "agent_id": agents[0]["id"] if agents else "fallback_agent",
             })
 
-        state["all_edges"] = state.get("all_edges", []) + edges
-        return state
+        return {"all_edges": edges}

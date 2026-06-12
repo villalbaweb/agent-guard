@@ -129,6 +129,7 @@ def get_embeddings() -> Optional[Callable[[list], Optional[list]]]:
     """
 
     base_embed_fn = None
+    cache_namespace = ""  # provider:model[:dim] — keeps cached vectors from different embedders apart
 
     # 1. OpenAI embeddings (primary — text-embedding-3-small is fast and cheap)
     if os.environ.get("OPENAI_API_KEY") and base_embed_fn is None:
@@ -151,6 +152,7 @@ def get_embeddings() -> Optional[Callable[[list], Optional[list]]]:
                     return None
 
             base_embed_fn = embed_openai
+            cache_namespace = f"openai:{model}"
         except ImportError:
             logger.warning("langchain-openai not installed. Skipping OpenAI embeddings.")
 
@@ -159,11 +161,15 @@ def get_embeddings() -> Optional[Callable[[list], Optional[list]]]:
         try:
             from langchain_google_genai import GoogleGenerativeAIEmbeddings
             model = os.environ.get("GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-001")
+            # gemini-embedding-001 emits 3072 dims by default; truncate (MRL) to
+            # EMBEDDING_DIM so vectors fit the pgvector schema (default 1536).
+            output_dim = int(os.environ.get("EMBEDDING_DIM", "") or "1536")
             embedder = GoogleGenerativeAIEmbeddings(
                 model=model,
                 google_api_key=os.environ["GOOGLE_API_KEY"],
+                output_dimensionality=output_dim,
             )
-            logger.debug(f"Embeddings: Google AI Studio ({model})")
+            logger.debug(f"Embeddings: Google AI Studio ({model}, dim={output_dim})")
 
             def embed_google(texts: list) -> Optional[list]:
                 try:
@@ -173,6 +179,7 @@ def get_embeddings() -> Optional[Callable[[list], Optional[list]]]:
                     return None
 
             base_embed_fn = embed_google
+            cache_namespace = f"google:{model}:{output_dim}"
         except ImportError:
             logger.warning("langchain-google-genai not installed. Skipping Google embeddings.")
 
@@ -194,7 +201,7 @@ def get_embeddings() -> Optional[Callable[[list], Optional[list]]]:
 
         for idx, text in enumerate(texts):
             text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
-            cache_key = f"embedding:v1:{text_hash}"
+            cache_key = f"embedding:v1:{cache_namespace}:{text_hash}"
             cached_val = redis_client.get(cache_key)
             if cached_val:
                 results[idx] = json.loads(cached_val)

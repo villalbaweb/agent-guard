@@ -1,9 +1,9 @@
-version: '3.8'
-
 services:
   # --- Redis — shared state, blueprint cache, loop-detection history ---
   redis:
-    image: redis:7-alpine
+    # redis-stack-server includes RediSearch/RedisJSON, required by
+    # langgraph-checkpoint-redis for durable HITL checkpoints.
+    image: redis/redis-stack-server:latest
     container_name: agentguard_redis
     restart: unless-stopped
     ports:

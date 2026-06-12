@@ -232,10 +232,15 @@ class PolicyEngine:
         policy_dict, compiled_rules = self._get_policy(policy_id)
         
         budget_cfg = policy_dict["budget"]
-        state_budget = state.get("budget_config", {})
-        # State-level budget_config overrides policy.yaml (allows per-run limits)
-        max_cost = state_budget.get("max_cost_usd") or budget_cfg.get("max_cost_usd", 10.0)
-        per_step_limit = state_budget.get("per_step_limit_usd") or budget_cfg.get("per_step_limit_usd", 1.0)
+        state_budget = state.get("budget_config", {}) or {}
+        # State-level budget_config overrides policy.yaml (allows per-run limits).
+        # Explicit None checks so a 0.0 override (deny-all budget) is honoured.
+        max_cost = state_budget.get("max_cost_usd")
+        if max_cost is None:
+            max_cost = budget_cfg.get("max_cost_usd", 10.0)
+        per_step_limit = state_budget.get("per_step_limit_usd")
+        if per_step_limit is None:
+            per_step_limit = budget_cfg.get("per_step_limit_usd", 1.0)
         subject = self._auth_subject(state)
 
         # 1. Per-step cost ceiling (catches runaway single calls)

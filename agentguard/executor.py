@@ -16,6 +16,7 @@ import time
 import hashlib
 from typing import Dict, Any, Optional, List
 
+from langgraph.errors import GraphInterrupt
 from langgraph.graph import StateGraph, END
 from langgraph.types import Send
 from langchain_core.runnables import RunnableConfig
@@ -39,10 +40,13 @@ class RecursiveExecutor:
         checkpointer=None,
         enable_reflection: bool = False,
         max_reflections: int = 1,
+        policy_engine: Optional[PolicyEngine] = None,
     ):
         self.memory = memory_manager
         self.registry = registry
-        self.policy = PolicyEngine(memory_manager)
+        # Accept a shared PolicyEngine so hot-reload and circuit-breaker state
+        # apply across executors (child graphs reuse the parent's engine).
+        self.policy = policy_engine or PolicyEngine(memory_manager)
         self.planner = ExecutionPlanner(registry)
         self.max_depth = max_depth
         self.checkpointer = checkpointer  # optional langgraph checkpointer for HITL
@@ -172,7 +176,7 @@ class RecursiveExecutor:
         result = self.planner.decompose(state)
 
         duration_ms = int((time.monotonic() - t_start) * 1000)
-        subtasks = [e.get("task", "") for e in result.get("all_edges", [])]
+        subtasks = result.get("results", {}).get("subtasks", [])
         ev = trace.new_event(
             run_id=run_id, node="decompose", depth=depth,
             parent_event_id=parent_event_id,
@@ -365,6 +369,25 @@ class RecursiveExecutor:
                 try:
                     from langgraph.types import interrupt as lg_interrupt
                     approval = lg_interrupt([hitl_payload])
+                except GraphInterrupt:
+                    # A checkpointer is configured: interrupt() signals the pause
+                    # by raising GraphInterrupt.  It MUST propagate so LangGraph
+                    # checkpoints the thread for later resume via POST /approve —
+                    # swallowing it here would silently disable HITL.
+                    raise
+                except Exception as e:
+                    logger.warning(
+                        f"Executor: HITL interrupt not available ({type(e).__name__}). "
+                        "Configure a LangGraph checkpointer to enable pause/resume."
+                    )
+                    return {
+                        "results": {result_key: f"HITL_PENDING: {decision.get('reason')}"},
+                        "usage_stats": usage,
+                        "governance_decisions": worker_decisions,
+                        "trace_events": worker_trace_events,
+                        "global_signal": "HITL_PENDING"
+                    }
+                else:
                     # Code below only executes on resume (after POST /approve)
                     approver = "unknown"
                     if isinstance(approval, dict):
@@ -382,18 +405,6 @@ class RecursiveExecutor:
                     )
                     worker_trace_events.append(approval_ev)
                     # Global signal is updated to OK if resumed
-                except Exception as e:
-                    logger.warning(
-                        f"Executor: HITL interrupt not available ({type(e).__name__}). "
-                        "Configure a LangGraph checkpointer to enable pause/resume."
-                    )
-                    return {
-                        "results": {result_key: f"HITL_PENDING: {decision.get('reason')}"},
-                        "usage_stats": usage,
-                        "governance_decisions": worker_decisions,
-                        "trace_events": worker_trace_events,
-                        "global_signal": "HITL_PENDING"
-                    }
             else:
                 logger.info(f"Executor: [BLOCKED] {agent_role} — {decision.get('reason')}")
                 return {
@@ -426,6 +437,7 @@ class RecursiveExecutor:
                 registry=self.registry,
                 max_depth=self.max_depth,
                 checkpointer=None,
+                policy_engine=self.policy,  # share engine: policy cache + circuit-breaker state
             )
             child_graph = child_executor.build_graph()
             child_result = child_graph.invoke(child_state)
@@ -466,10 +478,10 @@ class RecursiveExecutor:
         if sub_outputs and sub_outputs == "Max recursion depth reached.":
             final = sub_outputs
         else:
-            # Gather worker results
+            # Gather worker results (skip bookkeeping keys written by other nodes)
             worker_results = []
             for k, v in results.items():
-                if k == "final_answer" or k == "subtasks_output":
+                if k in ("final_answer", "subtasks", "subtasks_output"):
                     continue
                 # Assuming k is {agent_id}:{hash}
                 worker_results.append(f"{k.split(':')[0]}: {v}")
@@ -561,10 +573,13 @@ class RecursiveExecutor:
 
         if needs_replan:
             logger.info(f"Executor: [REFLECT] triggering replan (reflection {reflection_count + 1}/{self.max_reflections})")
+            # results uses a merge reducer, so an empty dict would be a no-op:
+            # explicitly blank final_answer so _edge_post_reflect routes to
+            # "replan".  all_edges needs no clearing — its reducer replaces the
+            # list wholesale when plan emits the fresh edges.
             return {
                 "reflection_count": reflection_count + 1,
-                "results": {},
-                "all_edges": [],
+                "results": {"final_answer": ""},
                 "trace_events": [ev],
             }
 

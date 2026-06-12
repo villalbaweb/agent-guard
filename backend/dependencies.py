@@ -20,6 +20,7 @@ from fastapi import Depends, Header, HTTPException, status
 
 from agentguard.db import DatabaseManager
 from agentguard.memory import MemoryManager
+from agentguard.policy import PolicyEngine
 from agentguard.registry import Registry
 from agentguard.executor import RecursiveExecutor
 from agentguard.auth import AuthContext, decode_token, make_auth_context
@@ -74,17 +75,27 @@ def get_registry() -> Registry:
     return registry
 
 
+@lru_cache(maxsize=1)
+def get_policy_engine() -> PolicyEngine:
+    """Singleton PolicyEngine shared by every executor and the /policy routes.
+
+    Sharing one instance means POST /policy/reload actually affects subsequent
+    runs and circuit-breaker state persists across requests.
+    """
+    return PolicyEngine(get_memory())
+
+
 def get_executor(
     memory: Annotated[MemoryManager, Depends(get_memory)],
     registry: Annotated[Registry, Depends(get_registry)],
 ) -> RecursiveExecutor:
-    """Fresh executor per-request (checkpointer wired in when available)."""
-    checkpointer = _build_checkpointer(memory)
+    """Fresh executor per-request, wired to the shared checkpointer + policy engine."""
     return RecursiveExecutor(
         memory_manager=memory,
         registry=registry,
         max_depth=3,
-        checkpointer=checkpointer,
+        checkpointer=get_checkpointer(),
+        policy_engine=get_policy_engine(),
     )
 
 
@@ -94,24 +105,37 @@ def get_run_store(
     return RunStore(memory)
 
 
-def _build_checkpointer(memory: MemoryManager):
-    """Attempt to build a Redis-backed checkpointer; fall back to MemorySaver."""
+@lru_cache(maxsize=1)
+def get_checkpointer():
+    """Singleton checkpointer: Redis-backed when available, else MemorySaver.
+
+    Must be a process-wide singleton — a per-request MemorySaver would lose the
+    checkpoint between POST /runs and POST /runs/{id}/approve, making HITL
+    resume impossible.
+    """
     try:
         from langgraph.checkpoint.memory import MemorySaver
-        # Try Redis-backed checkpointer if the package is installed
-        try:
-            from langgraph.checkpoint.redis import RedisSaver
-            import os
-            redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-            saver = RedisSaver.from_conn_string(redis_url)
-            logger.info("Checkpointer: Redis-backed (HITL survive restarts)")
-            return saver
-        except ImportError:
-            logger.info("Checkpointer: MemorySaver (install langgraph-checkpoint-redis for Redis)")
-            return MemorySaver()
     except Exception as e:
         logger.warning(f"Checkpointer unavailable: {e}. HITL interrupt/resume disabled.")
         return None
+
+    # Try Redis-backed checkpointer if the package is installed and reachable
+    try:
+        from langgraph.checkpoint.redis import RedisSaver
+        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+        # from_conn_string returns a context manager in recent versions;
+        # enter it once and keep the saver alive for the process lifetime.
+        cm_or_saver = RedisSaver.from_conn_string(redis_url)
+        saver = cm_or_saver.__enter__() if hasattr(cm_or_saver, "__enter__") and not hasattr(cm_or_saver, "get_tuple") else cm_or_saver
+        if hasattr(saver, "setup"):
+            saver.setup()
+        logger.info("Checkpointer: Redis-backed (HITL survives restarts)")
+        return saver
+    except ImportError:
+        logger.info("Checkpointer: MemorySaver (install langgraph-checkpoint-redis for Redis)")
+    except Exception as e:
+        logger.warning(f"Checkpointer: Redis saver failed ({e}) — falling back to MemorySaver.")
+    return MemorySaver()
 
 
 # --------------------------------------------------------------------------- #

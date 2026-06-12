@@ -12,6 +12,20 @@ cytoscape.use(fcose);
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
+/** Node fill/border colors per event status, shared by initial render and theme switches. */
+function nodeColors(status: string | undefined, isDarkMode: boolean): { bgColor: string; borderColor: string } {
+  if (status === 'error' || status === 'blocked') {
+    return { bgColor: isDarkMode ? '#7f1d1d' : '#fecaca', borderColor: '#ef4444' }; // red
+  }
+  if (status === 'hitl_pending') {
+    return { bgColor: isDarkMode ? '#854d0e' : '#fef08a', borderColor: '#eab308' }; // yellow
+  }
+  if (status === 'ok') {
+    return { bgColor: isDarkMode ? '#14532d' : '#bbf7d0', borderColor: '#22c55e' }; // green
+  }
+  return { bgColor: isDarkMode ? '#334155' : '#e2e8f0', borderColor: isDarkMode ? '#475569' : '#94a3b8' }; // gray
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<'trace' | 'policy'>('trace');
   const [runId, setRunId] = useState('');
@@ -90,19 +104,7 @@ function App() {
             label += `\n${event.action}`;
         }
 
-        let bgColor = isDarkMode ? '#334155' : '#e2e8f0'; // default gray
-        let borderColor = isDarkMode ? '#475569' : '#94a3b8';
-
-        if (event.status === 'error' || event.status === 'blocked') {
-            bgColor = isDarkMode ? '#7f1d1d' : '#fecaca'; // red
-            borderColor = isDarkMode ? '#ef4444' : '#ef4444';
-        } else if (event.status === 'hitl_pending') {
-            bgColor = isDarkMode ? '#854d0e' : '#fef08a'; // yellow
-            borderColor = isDarkMode ? '#eab308' : '#eab308';
-        } else if (event.status === 'ok') {
-            bgColor = isDarkMode ? '#14532d' : '#bbf7d0'; // green
-            borderColor = isDarkMode ? '#22c55e' : '#22c55e';
-        }
+        const { bgColor, borderColor } = nodeColors(event.status, isDarkMode);
 
         newElements.push({
           data: {
@@ -240,25 +242,11 @@ function App() {
   useEffect(() => {
      setElements(prev => prev.map(el => {
          if (el.data.eventData) {
-            const event = el.data.eventData;
-            let bgColor = isDarkMode ? '#334155' : '#e2e8f0';
-            let borderColor = isDarkMode ? '#475569' : '#94a3b8';
-            if (event.status === 'error' || event.status === 'blocked') {
-                bgColor = isDarkMode ? '#7f1d1d' : '#fecaca';
-                borderColor = isDarkMode ? '#ef4444' : '#ef4444';
-            } else if (event.status === 'hitl_pending') {
-                bgColor = isDarkMode ? '#854d0e' : '#fef08a';
-                borderColor = isDarkMode ? '#eab308' : '#eab308';
-            } else if (event.status === 'ok') {
-                bgColor = isDarkMode ? '#14532d' : '#bbf7d0';
-                borderColor = isDarkMode ? '#22c55e' : '#22c55e';
-            }
             return {
                 ...el,
                 data: {
                     ...el.data,
-                    bgColor,
-                    borderColor
+                    ...nodeColors(el.data.eventData.status, isDarkMode),
                 }
             };
          }
@@ -530,9 +518,9 @@ function App() {
                   stylesheet={stylesheet}
                   style={{ width: '100%', height: '100%' }}
                   className="w-full h-full"
-                  cy={(cy) => { (window as any).cy = cy;
+                  cy={(cy) => {
                     if (cyInstance !== cy) {
-                      setCyInstance(cy); (window as any).cyInstance = cy;
+                      setCyInstance(cy);
                       cy.on('tap', 'node', handleNodeClick);
                       cy.on('tap', handleBackgroundClick);
                     }
@@ -603,7 +591,7 @@ function App() {
                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border shrink-0 ${
                               selectedEvent.status === 'ok' ? (isDarkMode ? 'bg-green-950/60 text-green-400 border-green-900/40' : 'bg-green-50 text-green-700 border-green-200') :
                               selectedEvent.status === 'blocked' || selectedEvent.status === 'error' ? (isDarkMode ? 'bg-red-950/60 text-red-400 border-red-900/40' : 'bg-red-50 text-red-700 border-red-200') :
-                              selectedEvent.status === 'hitl_pending' ? (isDarkMode ? 'bg-yellow-950/60 text-yellow-400 border-yellow-900/40' : 'bg-yellow-50 text-yellow-700 border-yellow-250') :
+                              selectedEvent.status === 'hitl_pending' ? (isDarkMode ? 'bg-yellow-950/60 text-yellow-400 border-yellow-900/40' : 'bg-yellow-50 text-yellow-700 border-yellow-200') :
                               (isDarkMode ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-slate-100 text-slate-700 border-slate-200')
                           }`}>
                             {selectedEvent.status.toUpperCase()}
@@ -616,7 +604,7 @@ function App() {
                       <button
                         onClick={() => setSelectedEvent(null)}
                         className={`p-1.5 rounded-full transition-colors ${
-                          isDarkMode ? 'hover:bg-slate-800 text-slate-400 hover:text-slate-200' : 'hover:bg-slate-200/80 text-slate-50 hover:text-slate-700'
+                          isDarkMode ? 'hover:bg-slate-800 text-slate-400 hover:text-slate-200' : 'hover:bg-slate-200/80 text-slate-500 hover:text-slate-700'
                         }`}
                         title="Close tooltip"
                       >
@@ -731,7 +719,7 @@ function App() {
                             <div className="flex justify-between items-center">
                               <span className="font-semibold">Allowed: {selectedEvent.decision.allowed ? 'Yes' : 'No'}</span>
                               {selectedEvent.decision.hitl_required && (
-                                <span className={`text-[9px] px-1.5 py-0.5 rounded border ${isDarkMode ? 'bg-yellow-950/50 text-yellow-300 border-yellow-800' : 'bg-yellow-100 text-yellow-800 border-yellow-250'}`}>HITL Required</span>
+                                <span className={`text-[9px] px-1.5 py-0.5 rounded border ${isDarkMode ? 'bg-yellow-950/50 text-yellow-300 border-yellow-800' : 'bg-yellow-100 text-yellow-800 border-yellow-200'}`}>HITL Required</span>
                               )}
                             </div>
                             {selectedEvent.decision.reason && (

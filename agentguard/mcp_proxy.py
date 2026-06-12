@@ -85,6 +85,18 @@ class MCPSafetyProxy:
             MCPCallBlocked:      if policy blocks the call.
             MCPCallHITLRequired: if policy requires human approval.
         """
+        decision = self._check_policy(tool_name, arguments, cost_estimate)
+
+        if tool_fn is None:
+            return {"status": "allowed", "tool": tool_name, "dry_run": True, "decision": decision}
+
+        return await tool_fn(tool_name, arguments)
+
+    def _check_policy(self, tool_name: str, arguments: Dict[str, Any], cost_estimate: float):
+        """Run the policy check shared by the sync and async call paths.
+
+        Returns the GovernanceDecision when allowed; raises otherwise.
+        """
         action = f"mcp:{tool_name}"
         intent = f"MCP tool '{tool_name}' with args: {_summarize(arguments)}"
 
@@ -111,11 +123,7 @@ class MCPSafetyProxy:
             )
 
         logger.info(f"MCPSafetyProxy: ALLOW {action}")
-
-        if tool_fn is None:
-            return {"status": "allowed", "tool": tool_name, "dry_run": True, "decision": decision}
-
-        return await tool_fn(tool_name, arguments)
+        return decision
 
     def call_tool_sync(
         self,
@@ -128,22 +136,7 @@ class MCPSafetyProxy:
 
         Same semantics as call_tool() but calls tool_fn synchronously.
         """
-        action = f"mcp:{tool_name}"
-        intent = f"MCP tool '{tool_name}' with args: {_summarize(arguments)}"
-
-        allowed, decision = self.policy.check_step(
-            state=self.state,
-            action=action,
-            intent=intent,
-            cost_estimate=cost_estimate,
-        )
-
-        if not allowed:
-            if decision.get("hitl_required"):
-                raise MCPCallHITLRequired(tool_name=tool_name, reason=decision.get("reason"), decision=decision)
-            raise MCPCallBlocked(tool_name=tool_name, reason=decision.get("reason"), decision=decision)
-
-        logger.info(f"MCPSafetyProxy: ALLOW {action}")
+        decision = self._check_policy(tool_name, arguments, cost_estimate)
 
         if tool_fn is None:
             return {"status": "allowed", "tool": tool_name, "dry_run": True, "decision": decision}

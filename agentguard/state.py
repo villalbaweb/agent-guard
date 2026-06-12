@@ -26,6 +26,12 @@ def _merge_signal(left: str, right: str) -> str:
         return right
     return left
 
+def _replace_edges(left: List, right: List) -> List:
+    """Last-write-wins: plan rewrites the edge list wholesale on each
+    (re)planning pass, so a replan replaces stale edges instead of
+    appending duplicates.  An empty update keeps the existing list."""
+    return right if right else left
+
 class AgentGuardState(TypedDict):
     task: str
     subject: str
@@ -34,7 +40,7 @@ class AgentGuardState(TypedDict):
     depth: int
     results: Annotated[Dict[str, str], _merge_results]
     all_agents: Annotated[List[Dict[str, Any]], operator.add]
-    all_edges: Annotated[List[Dict[str, Any]], operator.add]
+    all_edges: Annotated[List[Dict[str, Any]], _replace_edges]
     global_signal: Annotated[str, _merge_signal]
     usage_stats: Annotated[Dict[str, float], _merge_usage]
     budget_config: Dict[str, float]

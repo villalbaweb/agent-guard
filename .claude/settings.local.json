@@ -14,7 +14,11 @@
       "Bash(ls:*)",
       "Bash(Get-Content \"D:\\\\Git\\\\agent-guard\\\\docs\\\\testing_guide.md\")",
       "Bash(Measure-Object -Line)",
-      "Bash(PYTHONPATH=. AGENTGUARD_NO_AUTH=1 uv run python examples/asset_management.py)"
+      "Bash(PYTHONPATH=. AGENTGUARD_NO_AUTH=1 uv run python examples/asset_management.py)",
+      "Bash(wc -l agentguard/*.py backend/*.py)",
+      "Bash(ls tests *)",
+      "PowerShell(uv run *)",
+      "PowerShell(docker info *)"
     ]
   }
 }

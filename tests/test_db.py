@@ -114,6 +114,8 @@ class TestDatabaseManagerLive:
     def db(self):
         from agentguard.db import DatabaseManager
         mgr = DatabaseManager()
+        if not mgr.available:
+            pytest.skip("DATABASE_URL is set but PostgreSQL is not reachable.")
         yield mgr
         mgr.close()
 
