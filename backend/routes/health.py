@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from agentguard.memory import MemoryManager
-from agentguard.llm import get_llm
+from agentguard.llm import get_llm, get_active_llm_provider
 from ..dependencies import get_memory, get_database
 from ..schemas import HealthResponse
 
@@ -36,6 +36,7 @@ def health_check(memory: Annotated[MemoryManager, Depends(get_memory)]) -> Healt
 
     # LLM probe
     llm_status = "ok" if get_llm() is not None else "unavailable"
+    llm_provider = get_active_llm_provider()
 
     # Overall status: degraded if any component is down
     if redis_status == "ok" and postgres_status == "ok":
@@ -50,5 +51,6 @@ def health_check(memory: Annotated[MemoryManager, Depends(get_memory)]) -> Healt
         redis=redis_status,
         postgres=postgres_status,
         llm=llm_status,
+        llm_provider=llm_provider,
         timestamp=datetime.now(timezone.utc),
     )

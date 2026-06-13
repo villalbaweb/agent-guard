@@ -100,6 +100,9 @@ class HealthResponse(BaseModel):
     redis: Literal["ok", "unavailable"]
     postgres: Literal["ok", "unavailable"]   # U-09/U-12
     llm: Literal["ok", "unavailable"]
+    llm_provider: Optional[str] = Field(
+        None, description="Active chat provider: google | openrouter | anthropic | openai | vertex."
+    )
     timestamp: datetime
 
 

@@ -6,14 +6,21 @@ Provides two factory functions consumed across the agentguard package:
   get_llm()        -> BaseChatModel | None
   get_embeddings() -> Callable[[list[str]], list[list[float]]] | None
 
-Provider resolution order for get_llm():
-  1. Google AI Studio  (GOOGLE_API_KEY)
-  2. Anthropic          (ANTHROPIC_API_KEY)
-  3. OpenAI-compatible  (OPENAI_API_KEY)
-       Set OPENAI_BASE_URL to redirect to any compatible endpoint.
-       Example for OpenRouter: OPENAI_BASE_URL=https://openrouter.ai/api/v1
-       Set OPENAI_MODEL to override the model name.
-  4. Google Vertex AI   (GOOGLE_APPLICATION_CREDENTIALS)
+Chat provider selection for get_llm():
+  Explicit  — set LLM_PROVIDER to one of:
+                google | openrouter | anthropic | openai | vertex
+              This wins even when several API keys are configured, making it
+              the switch between e.g. Gemini and OpenRouter.
+  Auto      — when LLM_PROVIDER is unset, first configured key wins, in order:
+                1. Google AI Studio  (GOOGLE_API_KEY,        GEMINI_MODEL)
+                2. Anthropic          (ANTHROPIC_API_KEY,    ANTHROPIC_MODEL)
+                3. OpenRouter         (OPENROUTER_API_KEY,   OPENROUTER_MODEL)
+                4. OpenAI-compatible  (OPENAI_API_KEY,       OPENAI_MODEL,
+                                       OPENAI_BASE_URL for LiteLLM/vLLM/Ollama)
+                5. Google Vertex AI   (GOOGLE_APPLICATION_CREDENTIALS)
+
+  OpenRouter is multi-model: OPENROUTER_MODEL takes any slug from
+  https://openrouter.ai/models (e.g. "anthropic/claude-haiku-4.5").
 
 Provider resolution order for get_embeddings():
   1. OpenAI  (OPENAI_API_KEY)  — text-embedding-3-small by default
@@ -58,62 +65,164 @@ def _get_redis():
 
 
 
+# --------------------------------------------------------------------------- #
+#  Chat-model provider factories
+#  Each returns a configured BaseChatModel, or None when its key/package is
+#  missing.  get_llm() picks one — explicitly via LLM_PROVIDER, or by the
+#  auto-detect priority order below.
+# --------------------------------------------------------------------------- #
+
+def _llm_google() -> Optional[BaseChatModel]:
+    """Google AI Studio — Gemini without GCP service accounts."""
+    if not os.environ.get("GOOGLE_API_KEY"):
+        return None
+    try:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+    except ImportError:
+        logger.warning("langchain-google-genai not installed. Skipping Google AI Studio.")
+        return None
+    model_name = os.environ.get("GEMINI_MODEL") or "gemini-2.0-flash"
+    logger.debug(f"LLM: Google AI Studio ({model_name})")
+    return ChatGoogleGenerativeAI(
+        model=model_name,
+        temperature=0,
+        google_api_key=os.environ["GOOGLE_API_KEY"],
+    )
+
+
+def _llm_openrouter() -> Optional[BaseChatModel]:
+    """OpenRouter — single API key, any model on https://openrouter.ai/models.
+
+    OPENROUTER_MODEL takes the full slug, e.g. "anthropic/claude-haiku-4.5",
+    "google/gemini-2.0-flash-001", "meta-llama/llama-3.3-70b-instruct".
+    """
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        return None
+    try:
+        from langchain_openai import ChatOpenAI
+    except ImportError:
+        logger.warning("langchain-openai not installed. Skipping OpenRouter.")
+        return None
+    # "or" defaults: empty-string values in .env count as unset
+    model_name = os.environ.get("OPENROUTER_MODEL") or "openai/gpt-4o-mini"
+    logger.debug(f"LLM: OpenRouter ({model_name})")
+    return ChatOpenAI(
+        model=model_name,
+        temperature=0,
+        api_key=os.environ["OPENROUTER_API_KEY"],
+        base_url=os.environ.get("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1",
+        default_headers={  # optional attribution headers recommended by OpenRouter
+            "HTTP-Referer": "https://github.com/villalbaweb/agent-guard",
+            "X-Title": "AgentGuard",
+        },
+    )
+
+
+def _llm_anthropic() -> Optional[BaseChatModel]:
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+    try:
+        from langchain_anthropic import ChatAnthropic
+    except ImportError:
+        logger.warning("langchain-anthropic not installed. Skipping Anthropic.")
+        return None
+    model_name = os.environ.get("ANTHROPIC_MODEL") or "claude-haiku-4-5-20251001"
+    logger.debug(f"LLM: Anthropic ({model_name})")
+    return ChatAnthropic(model=model_name, temperature=0)
+
+
+def _llm_openai() -> Optional[BaseChatModel]:
+    """OpenAI — or any OpenAI-compatible endpoint via OPENAI_BASE_URL
+    (LiteLLM, vLLM, Ollama, ...)."""
+    if not os.environ.get("OPENAI_API_KEY"):
+        return None
+    try:
+        from langchain_openai import ChatOpenAI
+    except ImportError:
+        logger.warning("langchain-openai not installed. Skipping OpenAI-compatible.")
+        return None
+    model_name = os.environ.get("OPENAI_MODEL") or "gpt-4o-mini"
+    base_url = os.environ.get("OPENAI_BASE_URL") or None  # None = standard OpenAI
+    logger.debug(f"LLM: OpenAI-compatible ({model_name}, base_url={base_url or 'default'})")
+    return ChatOpenAI(
+        model=model_name,
+        temperature=0,
+        api_key=os.environ["OPENAI_API_KEY"],
+        **({"base_url": base_url} if base_url else {}),
+    )
+
+
+def _llm_vertex() -> Optional[BaseChatModel]:
+    """Google Vertex AI — requires GCP service account credentials on disk."""
+    if not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+        return None
+    try:
+        from langchain_google_vertexai import ChatVertexAI
+    except ImportError:
+        logger.warning("langchain-google-vertexai not installed. Skipping Vertex AI.")
+        return None
+    model_name = os.environ.get("VERTEX_MODEL") or "gemini-2.0-flash"
+    logger.debug(f"LLM: Vertex AI ({model_name})")
+    return ChatVertexAI(model=model_name, temperature=0)
+
+
+_LLM_PROVIDERS = {
+    "google": _llm_google,
+    "gemini": _llm_google,        # alias
+    "openrouter": _llm_openrouter,
+    "anthropic": _llm_anthropic,
+    "openai": _llm_openai,
+    "vertex": _llm_vertex,
+}
+
+# Auto-detect order when LLM_PROVIDER is not set (backward compatible).
+_AUTO_DETECT_ORDER = ("google", "anthropic", "openrouter", "openai", "vertex")
+
+
+def get_active_llm_provider() -> Optional[str]:
+    """Return the provider name get_llm() would use, or None if unconfigured."""
+    choice = os.environ.get("LLM_PROVIDER", "").strip().lower()
+    if choice:
+        return choice if choice in _LLM_PROVIDERS else None
+    for name in _AUTO_DETECT_ORDER:
+        if _LLM_PROVIDERS[name]() is not None:
+            return name
+    return None
+
+
 def get_llm() -> Optional[BaseChatModel]:
     """
-    Returns an initialized chat model based on available environment variables.
+    Returns an initialized chat model.
+
+    Selection:
+      1. Explicit — LLM_PROVIDER env var ("google" | "openrouter" | "anthropic"
+         | "openai" | "vertex").  Misconfiguration logs an error and returns
+         None (mock mode) rather than silently using a different provider.
+      2. Auto-detect — first provider in _AUTO_DETECT_ORDER whose API key is set.
+
     Returns None if no provider is configured (triggers mock logic in callers).
     """
-
-    # 1. Google AI Studio — preferred for Gemini without GCP service accounts
-    if os.environ.get("GOOGLE_API_KEY"):
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            model_name = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-            logger.debug(f"LLM: Google AI Studio ({model_name})")
-            return ChatGoogleGenerativeAI(
-                model=model_name,
-                temperature=0,
-                google_api_key=os.environ["GOOGLE_API_KEY"],
+    choice = os.environ.get("LLM_PROVIDER", "").strip().lower()
+    if choice:
+        factory = _LLM_PROVIDERS.get(choice)
+        if factory is None:
+            logger.error(
+                f"LLM_PROVIDER='{choice}' is not recognized. "
+                f"Valid values: {sorted(set(_LLM_PROVIDERS))}. Falling back to mock mode."
             )
-        except ImportError:
-            logger.warning("langchain-google-genai not installed. Skipping Google AI Studio.")
-
-    # 2. Anthropic
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        try:
-            from langchain_anthropic import ChatAnthropic
-            model_name = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
-            logger.debug(f"LLM: Anthropic ({model_name})")
-            return ChatAnthropic(model=model_name, temperature=0)
-        except ImportError:
-            logger.warning("langchain-anthropic not installed. Skipping Anthropic.")
-
-    # 3. OpenAI-compatible — works with OpenAI, OpenRouter, LiteLLM, vLLM, Ollama, etc.
-    #    OPENAI_BASE_URL overrides the endpoint for any compatible provider.
-    if os.environ.get("OPENAI_API_KEY"):
-        try:
-            from langchain_openai import ChatOpenAI
-            model_name = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-            base_url = os.environ.get("OPENAI_BASE_URL")  # None = standard OpenAI
-            logger.debug(f"LLM: OpenAI-compatible ({model_name}, base_url={base_url or 'default'})")
-            return ChatOpenAI(
-                model=model_name,
-                temperature=0,
-                api_key=os.environ["OPENAI_API_KEY"],
-                **({"base_url": base_url} if base_url else {}),
+            return None
+        llm = factory()
+        if llm is None:
+            logger.error(
+                f"LLM_PROVIDER='{choice}' selected but its API key or package is "
+                "missing. Falling back to mock mode."
             )
-        except ImportError:
-            logger.warning("langchain-openai not installed. Skipping OpenAI-compatible.")
+        return llm
 
-    # 4. Google Vertex AI — requires GCP service account credentials on disk
-    if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
-        try:
-            from langchain_google_vertexai import ChatVertexAI
-            model_name = os.environ.get("VERTEX_MODEL", "gemini-2.0-flash")
-            logger.debug(f"LLM: Vertex AI ({model_name})")
-            return ChatVertexAI(model=model_name, temperature=0)
-        except ImportError:
-            logger.warning("langchain-google-vertexai not installed. Skipping Vertex AI.")
+    for name in _AUTO_DETECT_ORDER:
+        llm = _LLM_PROVIDERS[name]()
+        if llm is not None:
+            return llm
 
     logger.warning("No LLM provider configured. Falling back to mock mode.")
     return None
