@@ -541,7 +541,7 @@ class RecursiveExecutor:
         needs_replan = False
         critique = "Reflection skipped (no LLM available)."
 
-        llm = get_llm()
+        llm = self.policy.llm
         if llm and answer and reflection_count < self.max_reflections:
             prompt = (
                 "You are a quality reviewer for an AI agent system.\n\n"

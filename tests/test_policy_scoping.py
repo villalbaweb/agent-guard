@@ -11,7 +11,9 @@ def memory():
 
 @pytest.fixture
 def policy_engine(memory):
-    return PolicyEngine(memory)
+    pe = PolicyEngine(memory)
+    pe.llm = None
+    return pe
 
 def test_policy_isolation(policy_engine):
     """Verify that different policy_ids load different rules and budgets."""
