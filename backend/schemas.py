@@ -159,6 +159,67 @@ class AgentListResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+#  POST /api/gatekeeper/*                                                      #
+# --------------------------------------------------------------------------- #
+#  Inline governance for agents that run in their own process (a separate
+#  service, a different framework) instead of inside RecursiveExecutor. They
+#  call these endpoints per step; the same shared PolicyEngine decides.
+
+class VerifyRequest(BaseModel):
+    agent_id: str = Field(..., description="Identity of the calling agent/node, used as the policy action.")
+    input_text: str = Field(..., description="The text to evaluate — the prompt, task, or tool input.")
+    context: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Optional evaluation context. Recognised keys: run_id/task_id (groups "
+            "steps for loop detection), depth, cost_estimate, max_cost, policy_id, "
+            "and stage ('preflight' to run the task-level check instead of a step check)."
+        ),
+    )
+
+
+class VerifyResponse(BaseModel):
+    outcome: Literal["ALLOW", "BLOCK", "PAUSE"] = Field(
+        ..., description="PAUSE means a require_hitl rule matched — hold for human approval."
+    )
+    reason: str
+    decision_id: str
+    run_id: Optional[str] = None
+
+
+class ConsumeRequest(BaseModel):
+    run_id: str
+    cost: float = Field(0.0, ge=0.0, description="Cost in USD incurred by the step being reported.")
+    steps: int = Field(1, ge=0)
+    depth: int = Field(0, ge=0)
+    max_cost: Optional[float] = Field(None, description="Per-run budget override; falls back to policy.yaml.")
+    max_depth: Optional[int] = Field(None, description="Per-run recursion ceiling; unlimited when omitted.")
+
+
+class ConsumeResponse(BaseModel):
+    status: Literal["ALLOWED", "BLOCKED"]
+    reason: str
+    usage: Dict[str, float] = Field(default_factory=dict)
+
+
+class TrackThoughtRequest(BaseModel):
+    run_id: str
+    node_name: str
+    text: str
+
+
+class TrackThoughtResponse(BaseModel):
+    status: Literal["recorded"]
+    history_size: int
+
+
+class ClearHistoryResponse(BaseModel):
+    status: Literal["cleared"]
+    run_id: str
+    dropped: int
+
+
+# --------------------------------------------------------------------------- #
 #  Error envelope                                                              #
 # --------------------------------------------------------------------------- #
 

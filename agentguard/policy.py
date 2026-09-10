@@ -28,7 +28,7 @@ except ImportError:
     _YAML_AVAILABLE = False
 
 from .state import AgentGuardState, GovernanceDecision
-from .llm import get_llm, normalize_llm_output
+from .llm import get_guard_llm, normalize_llm_output
 from .memory import MemoryManager
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ class PolicyEngine:
 
     def __init__(self, memory_manager: MemoryManager):
         self.memory = memory_manager
-        self.llm = get_llm()
+        self.llm = get_guard_llm()
         self._policies_cache: Dict[str, Tuple[Dict[str, Any], List[Dict[str, Any]]]] = {}
         # D-03: circuit breaker state
         self._llm_consecutive_failures: int = 0

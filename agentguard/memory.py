@@ -141,6 +141,23 @@ class MemoryManager:
     def get_history(self, run_id: str) -> list:
         return self._get(self._key_history(run_id)) or []
 
+    def clear_history(self, run_id: str) -> int:
+        """Drop the thought history for a run, returning how many were dropped.
+
+        Used when a human interjects mid-run: the prior thoughts describe a
+        path the operator has just overridden, so keeping them would make loop
+        detection fire against reasoning that is no longer relevant.
+        """
+        key = self._key_history(run_id)
+        lock_key = f"lock:{key}"
+        self._acquire_lock(lock_key)
+        try:
+            dropped = len(self._get(key) or [])
+            self._set(key, [])
+            return dropped
+        finally:
+            self._release_lock(lock_key)
+
     def detect_loop(
         self,
         run_id: str,
@@ -229,6 +246,43 @@ class MemoryManager:
     def get_trace(self, run_id: str) -> Optional[Any]:
         """Retrieve a stored trace document, or None if not found."""
         return self._get(self._key_trace(run_id))
+
+    # ------------------------------------------------------------------ #
+    #  Consumption accounting (external agents via /api/gatekeeper)       #
+    # ------------------------------------------------------------------ #
+
+    def _key_consumption(self, run_id: str) -> str:
+        return f"run:{run_id}:consumption"
+
+    def get_consumption(self, run_id: str) -> Dict[str, float]:
+        """Cumulative cost/steps/depth reported so far for a run."""
+        return self._get(self._key_consumption(run_id)) or {
+            "total_cost": 0.0,
+            "steps": 0,
+            "max_depth_seen": 0,
+        }
+
+    def record_consumption(
+        self, run_id: str, cost: float, steps: int = 1, depth: int = 0
+    ) -> Dict[str, float]:
+        """Accumulate usage for a run and return the new totals.
+
+        Locked read-modify-write: parallel workers in a recursive graph report
+        concurrently, and a lost update here would under-count the budget the
+        circuit breaker is enforcing.
+        """
+        key = self._key_consumption(run_id)
+        lock_key = f"lock:{key}"
+        self._acquire_lock(lock_key)
+        try:
+            usage = self._get(key) or {"total_cost": 0.0, "steps": 0, "max_depth_seen": 0}
+            usage["total_cost"] = round(usage.get("total_cost", 0.0) + (cost or 0.0), 8)
+            usage["steps"] = usage.get("steps", 0) + (steps or 0)
+            usage["max_depth_seen"] = max(usage.get("max_depth_seen", 0), depth or 0)
+            self._set(key, usage)
+            return usage
+        finally:
+            self._release_lock(lock_key)
 
     # ------------------------------------------------------------------ #
     #  Generic key/value (for telemetry and ad-hoc state)                 #

@@ -72,7 +72,7 @@ def _get_redis():
 #  auto-detect priority order below.
 # --------------------------------------------------------------------------- #
 
-def _llm_google() -> Optional[BaseChatModel]:
+def _llm_google(model_override: Optional[str] = None) -> Optional[BaseChatModel]:
     """Google AI Studio — Gemini without GCP service accounts."""
     if not os.environ.get("GOOGLE_API_KEY"):
         return None
@@ -81,7 +81,7 @@ def _llm_google() -> Optional[BaseChatModel]:
     except ImportError:
         logger.warning("langchain-google-genai not installed. Skipping Google AI Studio.")
         return None
-    model_name = os.environ.get("GEMINI_MODEL") or "gemini-2.0-flash"
+    model_name = model_override or os.environ.get("GEMINI_MODEL") or "gemini-2.0-flash"
     logger.debug(f"LLM: Google AI Studio ({model_name})")
     return ChatGoogleGenerativeAI(
         model=model_name,
@@ -90,7 +90,7 @@ def _llm_google() -> Optional[BaseChatModel]:
     )
 
 
-def _llm_openrouter() -> Optional[BaseChatModel]:
+def _llm_openrouter(model_override: Optional[str] = None) -> Optional[BaseChatModel]:
     """OpenRouter — single API key, any model on https://openrouter.ai/models.
 
     OPENROUTER_MODEL takes the full slug, e.g. "anthropic/claude-haiku-4.5",
@@ -104,7 +104,7 @@ def _llm_openrouter() -> Optional[BaseChatModel]:
         logger.warning("langchain-openai not installed. Skipping OpenRouter.")
         return None
     # "or" defaults: empty-string values in .env count as unset
-    model_name = os.environ.get("OPENROUTER_MODEL") or "openai/gpt-4o-mini"
+    model_name = model_override or os.environ.get("OPENROUTER_MODEL") or "openai/gpt-4o-mini"
     logger.debug(f"LLM: OpenRouter ({model_name})")
     return ChatOpenAI(
         model=model_name,
@@ -118,7 +118,7 @@ def _llm_openrouter() -> Optional[BaseChatModel]:
     )
 
 
-def _llm_anthropic() -> Optional[BaseChatModel]:
+def _llm_anthropic(model_override: Optional[str] = None) -> Optional[BaseChatModel]:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return None
     try:
@@ -126,12 +126,12 @@ def _llm_anthropic() -> Optional[BaseChatModel]:
     except ImportError:
         logger.warning("langchain-anthropic not installed. Skipping Anthropic.")
         return None
-    model_name = os.environ.get("ANTHROPIC_MODEL") or "claude-haiku-4-5-20251001"
+    model_name = model_override or os.environ.get("ANTHROPIC_MODEL") or "claude-haiku-4-5-20251001"
     logger.debug(f"LLM: Anthropic ({model_name})")
     return ChatAnthropic(model=model_name, temperature=0)
 
 
-def _llm_openai() -> Optional[BaseChatModel]:
+def _llm_openai(model_override: Optional[str] = None) -> Optional[BaseChatModel]:
     """OpenAI — or any OpenAI-compatible endpoint via OPENAI_BASE_URL
     (LiteLLM, vLLM, Ollama, ...)."""
     if not os.environ.get("OPENAI_API_KEY"):
@@ -141,7 +141,7 @@ def _llm_openai() -> Optional[BaseChatModel]:
     except ImportError:
         logger.warning("langchain-openai not installed. Skipping OpenAI-compatible.")
         return None
-    model_name = os.environ.get("OPENAI_MODEL") or "gpt-4o-mini"
+    model_name = model_override or os.environ.get("OPENAI_MODEL") or "gpt-4o-mini"
     base_url = os.environ.get("OPENAI_BASE_URL") or None  # None = standard OpenAI
     logger.debug(f"LLM: OpenAI-compatible ({model_name}, base_url={base_url or 'default'})")
     return ChatOpenAI(
@@ -152,7 +152,7 @@ def _llm_openai() -> Optional[BaseChatModel]:
     )
 
 
-def _llm_vertex() -> Optional[BaseChatModel]:
+def _llm_vertex(model_override: Optional[str] = None) -> Optional[BaseChatModel]:
     """Google Vertex AI — requires GCP service account credentials on disk."""
     if not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
         return None
@@ -161,7 +161,7 @@ def _llm_vertex() -> Optional[BaseChatModel]:
     except ImportError:
         logger.warning("langchain-google-vertexai not installed. Skipping Vertex AI.")
         return None
-    model_name = os.environ.get("VERTEX_MODEL") or "gemini-2.0-flash"
+    model_name = model_override or os.environ.get("VERTEX_MODEL") or "gemini-2.0-flash"
     logger.debug(f"LLM: Vertex AI ({model_name})")
     return ChatVertexAI(model=model_name, temperature=0)
 
@@ -190,7 +190,7 @@ def get_active_llm_provider() -> Optional[str]:
     return None
 
 
-def get_llm() -> Optional[BaseChatModel]:
+def get_llm(model: Optional[str] = None) -> Optional[BaseChatModel]:
     """
     Returns an initialized chat model.
 
@@ -199,6 +199,9 @@ def get_llm() -> Optional[BaseChatModel]:
          | "openai" | "vertex").  Misconfiguration logs an error and returns
          None (mock mode) rather than silently using a different provider.
       2. Auto-detect — first provider in _AUTO_DETECT_ORDER whose API key is set.
+
+    `model` overrides the provider's configured model slug while keeping the
+    same provider and credentials — see get_guard_llm().
 
     Returns None if no provider is configured (triggers mock logic in callers).
     """
@@ -211,7 +214,7 @@ def get_llm() -> Optional[BaseChatModel]:
                 f"Valid values: {sorted(set(_LLM_PROVIDERS))}. Falling back to mock mode."
             )
             return None
-        llm = factory()
+        llm = factory(model)
         if llm is None:
             logger.error(
                 f"LLM_PROVIDER='{choice}' selected but its API key or package is "
@@ -220,12 +223,29 @@ def get_llm() -> Optional[BaseChatModel]:
         return llm
 
     for name in _AUTO_DETECT_ORDER:
-        llm = _LLM_PROVIDERS[name]()
+        llm = _LLM_PROVIDERS[name](model)
         if llm is not None:
             return llm
 
     logger.warning("No LLM provider configured. Falling back to mock mode.")
     return None
+
+
+def get_guard_llm() -> Optional[BaseChatModel]:
+    """Returns the model used for the PolicyEngine's semantic safety check.
+
+    The guard runs on every step and answers with a single word, so it wants a
+    fast, cheap model — while the executor's agents want the strongest one
+    available. AGENTGUARD_GUARD_MODEL splits the two; without it the guard just
+    shares the main model, as it always has.
+
+    Latency here is not cosmetic: check_step fails closed, so a guard slow
+    enough to time out its caller stalls or blocks real work.
+    """
+    guard_model = os.environ.get("AGENTGUARD_GUARD_MODEL") or None
+    if guard_model:
+        logger.info(f"PolicyEngine guard model: {guard_model} (AGENTGUARD_GUARD_MODEL)")
+    return get_llm(guard_model)
 
 
 def get_embeddings() -> Optional[Callable[[list], Optional[list]]]:

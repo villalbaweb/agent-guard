@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import asyncio
-from .routes import health, policy, runs, agents as agents_router
+from .routes import gatekeeper, health, policy, runs, agents as agents_router
 from .schemas import ErrorResponse, ErrorDetail
 
 try:
@@ -111,3 +111,4 @@ app.include_router(health.router)
 app.include_router(runs.router)
 app.include_router(policy.router)
 app.include_router(agents_router.router)
+app.include_router(gatekeeper.router)
