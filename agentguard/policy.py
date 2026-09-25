@@ -28,7 +28,7 @@ except ImportError:
     _YAML_AVAILABLE = False
 
 from .state import AgentGuardState, GovernanceDecision
-from .llm import get_guard_llm, normalize_llm_output
+from .llm import get_guard_llm, get_jev, normalize_llm_output
 from .memory import MemoryManager
 
 logger = logging.getLogger(__name__)
@@ -54,13 +54,18 @@ class PolicyEngine:
     def __init__(self, memory_manager: MemoryManager):
         self.memory = memory_manager
         self.llm = get_guard_llm()
+        # Jev answers the guard's ALLOW/BLOCK question with a probability; when
+        # enabled it takes precedence over the chat-model guard.
+        self.jev = get_jev("guard")
         self._policies_cache: Dict[str, Tuple[Dict[str, Any], List[Dict[str, Any]]]] = {}
         # D-03: circuit breaker state
         self._llm_consecutive_failures: int = 0
         self._rules_only_mode: bool = False
         self._full_block_mode: bool = False
 
-        if self.llm:
+        if self.jev:
+            logger.info(f"PolicyEngine: Jev guard active ({self.jev.model})")
+        elif self.llm:
             logger.info(f"PolicyEngine: LLM guard active ({self.llm.__class__.__name__})")
         else:
             logger.info("PolicyEngine: no LLM configured — rule-based checks only.")
@@ -171,6 +176,19 @@ class PolicyEngine:
 
         return True, False, "No content rules matched."
 
+    def _record_guard_failure(self, error: Exception) -> None:
+        """D-03: count a failed semantic-guard call; trip rules-only mode at the threshold."""
+        self._llm_consecutive_failures += 1
+        logger.error(
+            f"LLM policy check failed ({self._llm_consecutive_failures}x): {error}."
+        )
+        if self._llm_consecutive_failures >= self._LLM_FAIL_RULES_ONLY_AFTER:
+            self._rules_only_mode = True
+            logger.warning(
+                "PolicyEngine: circuit breaker — switching to rules-only mode "
+                f"after {self._llm_consecutive_failures} consecutive LLM failures."
+            )
+
     def _make_decision(
         self,
         action: str,
@@ -280,7 +298,42 @@ class PolicyEngine:
                 auth_subject=subject,
             )
 
-        if self.llm and not self._rules_only_mode:
+        if self.jev and not self._rules_only_mode:
+            guard_cfg = policy_dict.get("semantic_guard", {}) or {}
+            block_at = float(guard_cfg.get("block_at", 0.5))
+            hitl_at = guard_cfg.get("hitl_at")
+            hitl_at = block_at if hitl_at is None else float(hitl_at)
+            try:
+                p_violation = self.jev.noul(
+                    {"action": action, "intent": intent},
+                    "Is this agent action a genuine safety violation? Yes only if it clearly "
+                    "involves actual system exploitation, exfiltrating real PII or credentials, "
+                    "generating malware, financial fraud, or causing direct harm. Internal task "
+                    "execution, web search, data analysis, summarization, research, and code "
+                    "generation for legitimate purposes are not violations, even when the topic "
+                    "sounds complex or sensitive.",
+                )
+                self._llm_consecutive_failures = 0  # reset on success
+                if p_violation >= block_at:
+                    return False, self._make_decision(
+                        action, False,
+                        f"Jev semantic guard: violation probability {p_violation:.2f} >= {block_at:.2f}.",
+                        auth_subject=subject,
+                    )
+                if p_violation >= hitl_at:
+                    return False, self._make_decision(
+                        action, False,
+                        f"Jev semantic guard: uncertain (violation probability {p_violation:.2f}) "
+                        "— human approval required.",
+                        hitl_required=True, auth_subject=subject,
+                    )
+            except Exception as e:
+                self._record_guard_failure(e)
+                return False, self._make_decision(
+                    action, False, "LLM safety check unavailable — failing closed.",
+                    auth_subject=subject,
+                )
+        elif self.llm and not self._rules_only_mode:
             prompt = (
                 "You are a safety classifier for an AI governance research system. "
                 "Evaluate whether this specific agent action represents a GENUINE safety violation.\n\n"
@@ -304,16 +357,7 @@ class PolicyEngine:
                         auth_subject=subject,
                     )
             except Exception as e:
-                self._llm_consecutive_failures += 1
-                logger.error(
-                    f"LLM policy check failed ({self._llm_consecutive_failures}x): {e}."
-                )
-                if self._llm_consecutive_failures >= self._LLM_FAIL_RULES_ONLY_AFTER:
-                    self._rules_only_mode = True
-                    logger.warning(
-                        "PolicyEngine: circuit breaker — switching to rules-only mode "
-                        f"after {self._llm_consecutive_failures} consecutive LLM failures."
-                    )
+                self._record_guard_failure(e)
                 return False, self._make_decision(
                     action, False, "LLM safety check unavailable — failing closed.",
                     auth_subject=subject,

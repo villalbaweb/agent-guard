@@ -26,6 +26,7 @@ from .policy import PolicyEngine
 from .orchestrator import ExecutionPlanner
 from .memory import MemoryManager
 from .registry import Registry
+from .llm import get_jev
 from . import trace
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,8 @@ class RecursiveExecutor:
         self.checkpointer = checkpointer  # optional langgraph checkpointer for HITL
         self.enable_reflection = enable_reflection
         self.max_reflections = max_reflections
+        # Jev grades the answer with a probability instead of a parsed word.
+        self.reflect_jev = get_jev("reflect") if enable_reflection else None
 
     def build_graph(self):
         graph = StateGraph(AgentGuardState)
@@ -540,9 +543,21 @@ class RecursiveExecutor:
 
         needs_replan = False
         critique = "Reflection skipped (no LLM available)."
+        p_adequate = None
 
         llm = self.policy.llm
-        if llm and answer and reflection_count < self.max_reflections:
+        if self.reflect_jev and answer and reflection_count < self.max_reflections:
+            try:
+                p_adequate = self.reflect_jev.noul(
+                    {"task": task, "answer": answer},
+                    "Does this agent answer adequately address the original task?",
+                )
+                needs_replan = p_adequate < 0.5
+                critique = f"Reflection verdict: {'INADEQUATE' if needs_replan else 'ADEQUATE'} (Jev p_adequate={p_adequate:.2f})"
+                logger.info(f"Executor: [REFLECT] {critique}")
+            except Exception as e:
+                logger.warning(f"Executor: Jev reflection failed ({e}) — skipping replan.")
+        elif llm and answer and reflection_count < self.max_reflections:
             prompt = (
                 "You are a quality reviewer for an AI agent system.\n\n"
                 f"Original task: {task}\n\n"
@@ -568,6 +583,7 @@ class RecursiveExecutor:
                 "reflection_count": reflection_count,
                 "needs_replan": needs_replan,
                 "critique": critique,
+                "p_adequate": p_adequate,
             },
         )
 

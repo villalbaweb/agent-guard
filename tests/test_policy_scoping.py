@@ -13,6 +13,7 @@ def memory():
 def policy_engine(memory):
     pe = PolicyEngine(memory)
     pe.llm = None
+    pe.jev = None
     return pe
 
 def test_policy_isolation(policy_engine):

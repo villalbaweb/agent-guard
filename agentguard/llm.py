@@ -6,6 +6,9 @@ Provides two factory functions consumed across the agentguard package:
   get_llm()        -> BaseChatModel | None
   get_embeddings() -> Callable[[list[str]], list[list[float]]] | None
 
+Plus get_jev(use_case) -> JevClient | None for the decision points that Jev
+(TypeSafe's typed-decision model) answers better than a chat model.
+
 Chat provider selection for get_llm():
   Explicit  — set LLM_PROVIDER to one of:
                 google | openrouter | anthropic | openai | vertex
@@ -246,6 +249,61 @@ def get_guard_llm() -> Optional[BaseChatModel]:
     if guard_model:
         logger.info(f"PolicyEngine guard model: {guard_model} (AGENTGUARD_GUARD_MODEL)")
     return get_llm(guard_model)
+
+
+# Decision points where Jev replaces a one-word chat-model prompt.  Generative
+# steps (decompose, synthesize) are deliberately absent: Jev returns no text.
+JEV_USE_CASES = ("guard", "reflect", "route")
+
+
+def get_jev_use_cases() -> list:
+    """Use cases enabled via AGENTGUARD_JEV ("guard,reflect,route" or "all")."""
+    raw = os.environ.get("AGENTGUARD_JEV", "").strip().lower()
+    if raw == "all":
+        return list(JEV_USE_CASES)
+    enabled = [u.strip() for u in raw.split(",") if u.strip()]
+    unknown = sorted(set(enabled) - set(JEV_USE_CASES))
+    if unknown:
+        logger.error(f"AGENTGUARD_JEV: unknown use case(s) {unknown}. Valid: {list(JEV_USE_CASES)}.")
+    return [u for u in JEV_USE_CASES if u in enabled]
+
+
+def get_jev(use_case: str):
+    """Returns a JevClient for `use_case`, or None to keep the chat-model path.
+
+    The Jev counterpart of get_guard_llm(): the guard, reflection, and routing
+    steps each ask a closed question, which Jev answers with a calibrated
+    probability instead of a word the caller has to parse.  Opt-in per use
+    case through AGENTGUARD_JEV so each can be rolled out (or rolled back)
+    independently; unset, nothing changes.
+
+    Jev is served by OpenRouter's Decisions API, so it reuses
+    OPENROUTER_API_KEY whatever LLM_PROVIDER the chat model uses.
+      AGENTGUARD_JEV_MODEL    model slug   (default typesafe/jev-1.13)
+      AGENTGUARD_JEV_URL      endpoint     (default OpenRouter /api/alpha/decisions)
+      AGENTGUARD_JEV_TIMEOUT  seconds      (default 10)
+    """
+    if use_case not in JEV_USE_CASES:
+        raise ValueError(f"Unknown Jev use case '{use_case}'. Valid: {list(JEV_USE_CASES)}.")
+    if use_case not in get_jev_use_cases():
+        return None
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        logger.error(
+            f"AGENTGUARD_JEV enables '{use_case}' but OPENROUTER_API_KEY is not set. "
+            "Using the chat-model path instead."
+        )
+        return None
+
+    from .jev import JevClient, DEFAULT_MODEL, DEFAULT_URL
+    client = JevClient(
+        api_key=api_key,
+        model=os.environ.get("AGENTGUARD_JEV_MODEL") or DEFAULT_MODEL,
+        url=os.environ.get("AGENTGUARD_JEV_URL") or DEFAULT_URL,
+        timeout=float(os.environ.get("AGENTGUARD_JEV_TIMEOUT") or 10),
+    )
+    logger.info(f"Jev active for '{use_case}' ({client.model})")
+    return client
 
 
 def get_embeddings() -> Optional[Callable[[list], Optional[list]]]:

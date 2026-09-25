@@ -103,6 +103,10 @@ class HealthResponse(BaseModel):
     llm_provider: Optional[str] = Field(
         None, description="Active chat provider: google | openrouter | anthropic | openai | vertex."
     )
+    jev_use_cases: List[str] = Field(
+        default_factory=list,
+        description="Decision points answered by Jev instead of the chat model: guard | reflect | route.",
+    )
     timestamp: datetime
 
 

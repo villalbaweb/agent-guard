@@ -14,6 +14,13 @@ budget:
   warn_at_pct: 80              # Emit warning at 80% consumed
   per_step_limit_usd: 1.00    # Single tool call ceiling
 
+# --- Jev Semantic Guard Thresholds (used when AGENTGUARD_JEV enables "guard") ---
+# Jev returns P(violation) per step. Pick thresholds from the cost of each kind
+# of mistake: >= block_at blocks; hitl_at <= p < block_at pauses for approval.
+semantic_guard:
+  block_at: 0.5
+  hitl_at: 0.5                 # equal to block_at = no approval band
+
 # --- Content Policies (Wedge 2: PII & Forbidden Topics) ---
 content_rules:
   - id: block_pii_ssn

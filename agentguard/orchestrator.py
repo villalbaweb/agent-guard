@@ -3,7 +3,7 @@ import re
 import logging
 from typing import Dict, Any, List
 from .state import AgentGuardState
-from .llm import get_llm, normalize_llm_output
+from .llm import get_llm, get_jev, normalize_llm_output
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +11,9 @@ logger = logging.getLogger(__name__)
 class ExecutionPlanner:
     def __init__(self, registry):
         self.registry = registry
-        self.llm = get_llm()
+        self.llm = get_llm()  # still needed: decompose() generates subtask text
+        # Jev routes subtasks to agents when pgvector search is unavailable.
+        self.jev = get_jev("route")
         if self.llm:
             logger.info(f"ExecutionPlanner: LLM router active ({self.llm.__class__.__name__})")
         else:
@@ -81,8 +83,16 @@ class ExecutionPlanner:
         # Check if vector search is active on the registry
         vector_search_active = getattr(self.registry, "_db", None) is not None
 
+        jev_routes = {}
+        if not vector_search_active and self.jev:
+            jev_routes = self._route_with_jev(state.get("task", ""), subtasks)
+
         edges = []
-        for subtask in subtasks:
+        for i, subtask in enumerate(subtasks):
+            if i in jev_routes:
+                # Jev picked the agent directly — no verb extraction or substring match.
+                edges.append({"task": subtask, "agent_id": jev_routes[i]})
+                continue
             if vector_search_active:
                 # Fast path: embed the full subtask, compare directly against
                 # agent embeddings — one vector DB query, zero LLM calls.
@@ -118,3 +128,38 @@ class ExecutionPlanner:
             })
 
         return {"all_edges": edges}
+
+    def _route_with_jev(self, task: str, subtasks: List[str]) -> Dict[int, str]:
+        """Route every subtask to a registered agent in one Jev request.
+
+        Each subtask is a choice question over the agents' descriptions, keyed
+        by agent id. Returns {subtask_index: agent_id}; empty on failure, so
+        plan() falls back to the LLM intent-extraction path.
+        """
+        criteria = {
+            a["id"]: f"{a['role']}: {a['semantic_description']}"
+            for a in self.registry.list_all()
+        }
+        if not criteria or not subtasks:
+            return {}
+        try:
+            answers = self.jev.choices(
+                {"task": task},
+                {
+                    f"subtask_{i}": (f"Which agent should handle this subtask: {subtask}", criteria)
+                    for i, subtask in enumerate(subtasks)
+                },
+            )
+        except Exception as e:
+            logger.error(f"ExecutionPlanner: Jev routing failed ({e}) — using fallback routing.")
+            return {}
+
+        routes = {}
+        for i in range(len(subtasks)):
+            answer = answers[f"subtask_{i}"]
+            routes[i] = answer["choice"]
+            logger.debug(
+                f"ExecutionPlanner: Jev-routed '{subtasks[i][:60]}' → {answer['choice']} "
+                f"(confidence {answer.get('confidence')})"
+            )
+        return routes

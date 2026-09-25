@@ -1,11 +1,12 @@
 """GET /health — Redis + PostgreSQL + LLM provider liveness probe."""
+import os
 from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
 from agentguard.memory import MemoryManager
-from agentguard.llm import get_llm, get_active_llm_provider
+from agentguard.llm import get_llm, get_active_llm_provider, get_jev_use_cases
 from ..dependencies import get_memory, get_database
 from ..schemas import HealthResponse
 
@@ -37,6 +38,8 @@ def health_check(memory: Annotated[MemoryManager, Depends(get_memory)]) -> Healt
     # LLM probe
     llm_status = "ok" if get_llm() is not None else "unavailable"
     llm_provider = get_active_llm_provider()
+    # get_jev() falls back to the chat model without an OpenRouter key.
+    jev_use_cases = get_jev_use_cases() if os.environ.get("OPENROUTER_API_KEY") else []
 
     # Overall status: degraded if any component is down
     if redis_status == "ok" and postgres_status == "ok":
@@ -52,5 +55,6 @@ def health_check(memory: Annotated[MemoryManager, Depends(get_memory)]) -> Healt
         postgres=postgres_status,
         llm=llm_status,
         llm_provider=llm_provider,
+        jev_use_cases=jev_use_cases,
         timestamp=datetime.now(timezone.utc),
     )

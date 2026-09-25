@@ -87,6 +87,7 @@ class TestReflectionNode:
         """Without an LLM, reflect skips critique and does not trigger a replan."""
         executor = _make_executor(enable_reflection=True)
         executor.policy.llm = None  # ensure no LLM
+        executor.reflect_jev = None
 
         state = make_initial_state(task="test task")
         state["results"] = {"final_answer": "An answer."}
